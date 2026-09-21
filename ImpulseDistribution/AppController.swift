@@ -2697,6 +2697,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         var notes:[(label:String, value:String)] = []
         var screenEstimate:Double? = nil
         let ductedGapCount:Int
+        var equalSpacing:RadialProfileWindow.EqualSpacingComparison? = nil
 
         guard let bs = await segment.basicSections.first else {
 
@@ -2736,6 +2737,51 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             notes.append((label: "Model:", value: "series chain, each gap at its own radius"))
             notes.append((label: "Insulation:", value: AppController.GapInsulationNote(gaps: gaps, basicSection: bs, between: "turns")))
             notes.append((label: "Ducts:", value: ductedGapCount > 0 ? "\(ductedGapCount), at gaps \(gaps.enumerated().filter { $0.element.duct > 0.0 }.map { String($0.offset + 1) }.joined(separator: ", "))" : "none"))
+
+            // THE EQUAL-SPACING CONVENTION, beside the model rather than instead of it: ID to OD less the copper, divided equally over
+            // the gaps, ducts and all - see Segment.SheetGapCapacitancesEqualSpacing. Same coil voltage, same instant, so the two
+            // curves differ only in how the ducts are treated. A failure here (a build the copper fills) costs the comparison and
+            // nothing else.
+            //
+            // Its worst ΔV is judged across the insulation REALLY between two turns where there is no duct - the plain gap of the
+            // model above - because the spacing it was divided with has oil smeared into it and is no material at all. That is the
+            // question the convention is normally asked to answer: is the turn paper good for this voltage.
+            if let equalGaps = try? await segment.SheetGapCapacitancesEqualSpacing(), !equalGaps.isEmpty,
+               let equalProfile = try? TurnLadderModel.SolveSheet(gapCapacitances: equalGaps.map { $0.capacitance },
+                                                                  gapRadii: equalGaps.map { $0.radius },
+                                                                  segmentVoltage: instant.vAbove - instant.vBelow),
+               let worst = equalProfile.worst {
+
+                var allowable:Double? = nil
+                var utilization = 0.0
+                var material = "-"
+
+                if let plain = gaps.first(where: { $0.duct == 0.0 }), plain.insulation > 0.0 {
+
+                    let site = DielectricStress.StressSite(kind: .turnToTurn,
+                                                           location: "Coil \(coil), gap \(worst.index + 1), equal spacing",
+                                                           voltageTerms: [],
+                                                           columns: [[DielectricLayer.Paper(plain.insulation)]],
+                                                           innerRadius: worst.radius - plain.insulation / 2.0,
+                                                           usesCornerModel: false,
+                                                           gapLength: plain.insulation)
+
+                    if let check = DielectricStress.Evaluate(site: site, deltaV: worst.deltaV, time: 0.0), check.averageUtilization > 0.0 {
+
+                        allowable = worst.deltaV / check.averageUtilization
+                        utilization = check.averageUtilization
+                        material = "\(check.material)"
+                    }
+                }
+
+                equalSpacing = RadialProfileWindow.EqualSpacingComparison(spacing: equalGaps[0].spacing,
+                                                                          deltaV: equalProfile.gaps.map { $0.deltaV },
+                                                                          worstIndex: worst.index,
+                                                                          worstDeltaV: worst.deltaV,
+                                                                          allowableDeltaV: allowable,
+                                                                          utilization: utilization,
+                                                                          material: material)
+            }
         }
         else if wdgType == .layer {
 
@@ -2931,7 +2977,8 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
                                             ductedGapCount: ductedGapCount,
                                             screenEstimate: screenEstimate,
                                             turnToTurn: turnToTurn,
-                                            notes: notes)
+                                            notes: notes,
+                                            equalSpacing: equalSpacing)
     }
 
     /// A coil's potential at a height, held at the nearest node past either end of it.

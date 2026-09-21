@@ -93,6 +93,29 @@ class RadialProfileWindow:NSWindowController {
         let material:String
     }
 
+    /// A sheet winding's gaps under a client's EQUAL-SPACING convention: the build less the copper divided equally over the N − 1
+    /// gaps, ducts and all. See Segment.SheetGapCapacitancesEqualSpacing.
+    ///
+    /// A COMPARISON, NOT A SECOND ANSWER. It is drawn beside the placed-duct profile because some clients specify their turn-to-turn
+    /// voltages this way, and it is driven by the same coil voltage at the same instant, so the two curves differ ONLY in how the
+    /// ducts are treated. The placed-duct curve is the physics; this one is the convention. Neither the stress report nor Cs sees it.
+    struct EqualSpacingComparison {
+
+        /// The common spacing between turns, in metres.
+        let spacing:Double
+        /// The voltage across each gap, innermost first, in volts - gap for gap with Contents.points.
+        let deltaV:[Double]
+        /// The largest of those, and its 0-based gap index.
+        let worstIndex:Int
+        let worstDeltaV:Double
+        /// The worst ΔV evaluated across the insulation that is REALLY between two turns where there is no duct - the plain gap of
+        /// the placed-duct model - since the equal spacing s is a notional dimension with oil smeared into it and has no material
+        /// that could be judged. Nil where there is no plain gap or it could not be evaluated.
+        let allowableDeltaV:Double?
+        let utilization:Double
+        let material:String
+    }
+
     /// Everything one of these windows draws. Built by AppController.BuildRadialProfile, so that the menu command and the scripted
     /// self-test produce the same window from the same numbers.
     struct Contents {
@@ -121,6 +144,9 @@ class RadialProfileWindow:NSWindowController {
         let turnToTurn:TurnToTurnPoint?
         /// Rows for the annotation block, as (label, value) pairs.
         let notes:[(label:String, value:String)]
+        /// The equal-spacing comparison, for a sheet winding. Nil for a layer winding, and for a sheet winding whose spacing could
+        /// not be formed.
+        var equalSpacing:EqualSpacingComparison? = nil
     }
 
     private let points:[GapPoint]
@@ -131,6 +157,7 @@ class RadialProfileWindow:NSWindowController {
     private let ductedGapCount:Int
     private let turnToTurn:TurnToTurnPoint?
     private let notes:[(label:String, value:String)]
+    private let equalSpacing:EqualSpacingComparison?
     private let peakTestVoltage:Double
 
     private let graphView = StressProfileView()
@@ -146,6 +173,7 @@ class RadialProfileWindow:NSWindowController {
         self.ductedGapCount = contents.ductedGapCount
         self.turnToTurn = contents.turnToTurn
         self.notes = contents.notes
+        self.equalSpacing = contents.equalSpacing
         self.peakTestVoltage = peakTestVoltage
 
         let coil = contents.coil
@@ -317,6 +345,22 @@ class RadialProfileWindow:NSWindowController {
             }
         }
 
+        // The client's equal-spacing convention, beside the placed-duct answer rather than instead of it. Its utilization is taken
+        // across the REAL plain-gap paper - the dimension s it was divided with has oil smeared into it and no material to judge.
+        if let equalSpacing {
+
+            annotation.append((label: "Equal spacing (blue):", value: String(format: "%.3f mm between every pair of turns, ducts smeared in", equalSpacing.spacing * 1000.0)))
+            annotation.append((label: "  Worst gap:", value: String(format: "%d of %d — ΔV %@", equalSpacing.worstIndex + 1, equalSpacing.deltaV.count, RadialProfileWindow.Volts(equalSpacing.worstDeltaV))))
+
+            if let allowable = equalSpacing.allowableDeltaV {
+
+                annotation.append((label: "  Utilization:", value: String(format: "%.1f%% of %@ allowable (%@), across the real plain-gap paper",
+                                                                          equalSpacing.utilization * 100.0,
+                                                                          RadialProfileWindow.Volts(allowable),
+                                                                          equalSpacing.material)))
+            }
+        }
+
         if !points.isEmpty {
 
             // The largest ΔV anywhere in the winding against the simple assumption - so on a ducted coil this is the ducted gap's
@@ -349,7 +393,11 @@ class RadialProfileWindow:NSWindowController {
                                                 markers: [],
                                                 markerName: "",
                                                 xAxis: .ordinal(title: isSheet ? "Gap between turns, counted outwards from the inside" : "Gap between layers, counted outwards from the inside"),
-                                                allowableMayGoOffScale: true)
+                                                allowableMayGoOffScale: true,
+                                                comparison: equalSpacing.map { comparison in
+
+                                                    comparison.deltaV.enumerated().map { StressProfileView.Point(z: Double($0.offset + 1), value: $0.element, allowable: nil, utilization: 0.0) }
+                                                } ?? [])
 
         if isSheet {
 
@@ -362,6 +410,11 @@ class RadialProfileWindow:NSWindowController {
             else {
 
                 note += " With no duct in the winding the only thing that varies is the gap capacitance's growth with radius (C ∝ r, so ΔV ∝ 1/r), which makes the innermost gap the worst by exactly the ratio of the radii."
+            }
+
+            if equalSpacing != nil {
+
+                note += " The BLUE curve is the equal-spacing convention some clients specify: ID to OD less the copper, divided equally over the N − 1 gaps, so every duct is smeared into every gap. Same coil voltage, same instant — the curves differ only in how the ducts are treated. The red curve is the physics."
             }
 
             noteLabel.stringValue = note

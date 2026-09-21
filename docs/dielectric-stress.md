@@ -363,6 +363,23 @@ reads **76.8 kV (3.68×)** with the ducts at 4/7/11, where the outermost gap car
 where the line-end gap is plain insulation and the ducts sit down in the low-voltage part of the winding. A sheet winding is not
 sensitive this way — its chain is uniform apart from 1/r, so a duct carries much the same wherever it is put. `TODO.md` §8a.
 
+### The equal-spacing convention is drawn beside the model, never instead of it (2026-09-21)
+
+Some clients specify a sheet winding's turn-to-turn voltages as though every turn were separated by the same dimension:
+`s = ((OD − ID)/2 − N·t)/(N − 1)`, the build less the copper divided over the gaps, ducts and all. That is exactly the smearing the
+section above removed from the model, so it is carried as a **comparison only**. `Segment.SheetGapCapacitancesEqualSpacing` forms
+the gaps at that one spacing (each at its own radius, so the curve differs from the model's only in how the ducts are treated),
+`BuildRadialProfile` runs them through the same `SolveSheet` with the same coil voltage at the same instant, and the radial profile
+window draws the result as a thin **blue** curve beside the red one, with its own rows in the annotation. It never feeds Cs, the
+simulation or the stress report; do not let it.
+
+Its worst ΔV is evaluated across the **real plain-gap paper** (τ from the design file), not across s: s has oil smeared into it and
+is no material that could be judged, and "is the turn paper good for this voltage" is the question the convention is asked. On the
+`SheetAndLayer` fixture it gives 1.765 mm per gap and **4.10 kV at gap 1 (21.5% of the paper's allowable)**, against the model's
+**383 V (2.0%)** on the worst plain gap and **14.9 kV** on the worst duct. So the convention is conservative for the turn paper by
+roughly a factor of ten and understates the voltage across a duct by nearly four — which the duct's own allowable absorbs here, but
+that is a fact about this design, not a property of the convention.
+
 ### The worst gap has two answers on a ducted coil, and the turn-to-turn pair is a third site
 
 Rank the gaps by **volts** and the answer is a ducted gap in every ducted winding, for the reason above: the duct is some fifty

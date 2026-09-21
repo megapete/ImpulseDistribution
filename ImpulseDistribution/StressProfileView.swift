@@ -109,6 +109,10 @@ class StressProfileView:NSView {
         /// paper withstands in EVERY design, so scaling to the allowable would flatten that graph onto its x axis always, and it
         /// would never show the one thing it is drawn for.
         var allowableMayGoOffScale:Bool = false
+        /// A second profile drawn beside the first for comparison, on the same x positions, or empty for none. Only its values are
+        /// used: it has no allowable, is never the worst point, and the annotation says what it is. The radial profile window uses it
+        /// for a sheet winding's equal-spacing convention against the placed-duct model.
+        var comparison:[Point] = []
 
         /// True where every point has the same allowable, which is the ordinary case and the one in which the allowable really is
         /// a horizontal line.
@@ -146,6 +150,7 @@ class StressProfileView:NSView {
     private let allowableColor = NSColor.systemOrange
     private let extremumColor = NSColor.systemYellow
     private let markerColor = NSColor.systemGray
+    private let comparisonColor = NSColor.systemBlue
 
     private let marginRight = 16.0
     private let marginTop = 14.0
@@ -179,7 +184,7 @@ class StressProfileView:NSView {
         let xMinimum = first.z * plot.xAxis.scale
         let xMaximum = max(last.z * plot.xAxis.scale, xMinimum + 1.0)
 
-        let peakValue = plot.points.map { $0.value }.max() ?? 1.0
+        let peakValue = (plot.points + plot.comparison).map { $0.value }.max() ?? 1.0
         let allowablePeak = plot.points.compactMap { $0.allowable }.max()
         let allowableIsOnScale = !plot.allowableMayGoOffScale || (allowablePeak ?? 0.0) <= StressProfileView.allowableScaleLimit * peakValue
         let peakAllowable = allowableIsOnScale ? allowablePeak : nil
@@ -257,6 +262,11 @@ class StressProfileView:NSView {
 
         let curve = plot.points.map { NSPoint(x: ViewX($0.z * plot.xAxis.scale), y: ViewY($0.value)) }
 
+        // The comparison first, and thinner, so that where the two coincide the profile itself is the one on top.
+        let comparisonCurve = plot.comparison.map { NSPoint(x: ViewX($0.z * plot.xAxis.scale), y: ViewY($0.value)) }
+
+        Stroke(points: comparisonCurve, color: comparisonColor, width: 1.0)
+
         Stroke(points: curve, color: valueColor, width: 1.5)
 
         // The allowable. Drawn dashed so that it reads as a limit rather than as a second measurement, and so that a profile whose
@@ -298,7 +308,7 @@ class StressProfileView:NSView {
         dot.fill()
 
         DrawAnnotation(rows: plot.annotation,
-                       curve: curve,
+                       curves: [curve, comparisonCurve],
                        plotLeft: plotLeft,
                        plotRight: plotRight,
                        plotBottom: plotBottom,
@@ -412,7 +422,7 @@ class StressProfileView:NSView {
     }
 
     /// The numbers, in the body of the plot.
-    private func DrawAnnotation(rows:[(label:String, value:String)], curve:[NSPoint], plotLeft:CGFloat, plotRight:CGFloat, plotBottom:CGFloat, plotTop:CGFloat, allowableY:CGFloat?) {
+    private func DrawAnnotation(rows:[(label:String, value:String)], curves:[[NSPoint]], plotLeft:CGFloat, plotRight:CGFloat, plotBottom:CGFloat, plotTop:CGFloat, allowableY:CGFloat?) {
 
         guard !rows.isEmpty else {
 
@@ -477,23 +487,27 @@ class StressProfileView:NSView {
             // The cost is how much of the drawn CURVE the box covers, and the curve is the polyline, not its vertices. Counting
             // vertices alone reads a box as empty when a steep segment runs straight through it between two points that both fall
             // outside - which is exactly what a sheet winding's profile does, three tall spikes with everything else on the floor,
-            // and it put the annotation on top of the peak the graph exists to show. The segments are sampled instead.
+            // and it put the annotation on top of the peak the graph exists to show. The segments are sampled instead. A comparison
+            // curve counts the same as the profile: a box sitting on either hides something the reader was shown the graph for.
             var covered = 0
 
-            for i in 0..<curve.count {
+            for curve in curves {
 
-                if rect.contains(curve[i]) { covered += samplesPerSegment }
+                for i in 0..<curve.count {
 
-                guard i + 1 < curve.count else { continue }
+                    if rect.contains(curve[i]) { covered += samplesPerSegment }
 
-                let from = curve[i], to = curve[i + 1]
+                    guard i + 1 < curve.count else { continue }
 
-                for step in 1..<samplesPerSegment {
+                    let from = curve[i], to = curve[i + 1]
 
-                    let fraction = CGFloat(step) / CGFloat(samplesPerSegment)
-                    let at = NSPoint(x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction)
+                    for step in 1..<samplesPerSegment {
 
-                    if rect.contains(at) { covered += 1 }
+                        let fraction = CGFloat(step) / CGFloat(samplesPerSegment)
+                        let at = NSPoint(x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction)
+
+                        if rect.contains(at) { covered += 1 }
+                    }
                 }
             }
 

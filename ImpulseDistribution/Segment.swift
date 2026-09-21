@@ -1671,6 +1671,77 @@ actor Segment: Equatable /*, Hashable */ {
         return result
     }
 
+    /// The gaps of a SHEET winding as a client's EQUAL-SPACING convention describes them, innermost gap first - a comparison figure,
+    /// not the model.
+    ///
+    /// The convention: take the radial build from ID to OD, subtract the copper, and divide what is left equally over the N − 1
+    /// gaps, so every turn is separated from the next by the same dimension
+    ///
+    ///     s = ((r2 − r1) − N·t) / (N − 1)
+    ///
+    /// whether that gap really holds a 0.25 mm wrap of paper or a 6 mm oil duct. It is exactly the smearing that
+    /// `SheetGapCapacitances` was rewritten to stop doing (docs/dielectric-stress.md, "Cooling ducts are placed, not smeared"), and
+    /// it is here only because some clients specify their turn-to-turn voltages this way. It must never feed Cs, the simulation or
+    /// the stress report; `AppController.BuildRadialProfile` draws it beside the placed-duct profile and nowhere else.
+    ///
+    /// Gap k is centred at r1 + (k + 1)·t + (k + ½)·s, and is formed with the same expression SheetGapCapacitances uses for a gap
+    /// with no duct, at thickness s:
+    ///
+    ///     C_k = ε0·εPaper·2π·r_k·(h + 2s)/s
+    ///
+    /// Every gap then has the same thickness and the same material, so in the series chain the permittivity and the (h + 2s) term
+    /// cancel and ΔV_k ∝ 1/r_k: an even division V/(N − 1) with the same gentle 1/r slope a duct-free sheet coil has. The radius is
+    /// kept rather than dropped because it costs nothing and makes the two curves differ ONLY in how the ducts are treated. εPaper is
+    /// immaterial to the voltages and is used only so that the capacitances come out at plausible magnitudes.
+    ///
+    /// The build is the Segment's LIVE radii (standing rule 7) - "use the OD and ID" is what the convention says.
+    ///
+    /// - Returns: each gap's centre radius, its capacitance and the common spacing s, all in SI units.
+    func SheetGapCapacitancesEqualSpacing() throws -> [(radius:Double, capacitance:Double, spacing:Double)] {
+
+        guard !self.isStaticRing else {
+
+            throw SegmentError(info: "\(self.location)", type: .StaticRing)
+        }
+
+        guard !self.isRadialShield else {
+
+            throw SegmentError(info: "\(self.location)", type: .RadialShield)
+        }
+
+        guard self.wdgType == .sheet, let bs = self.basicSections.first else {
+
+            throw SegmentError(info: "", type: .IllegalWindingType)
+        }
+
+        let turns = Int(bs.N.rounded())
+
+        guard turns >= 2 else {
+
+            return []
+        }
+
+        let gapCount = turns - 1
+        let t = bs.wdgData.turn.radialDimn
+        let spacing = ((self.r2 - self.r1) - Double(turns) * t) / Double(gapCount)
+
+        guard spacing > 0.0 else {
+
+            throw SegmentError(info: "The sheet winding's turns fill its whole radial build, so there is no spacing to divide equally", type: .IllegalWindingType)
+        }
+
+        let h = bs.height
+
+        return (0..<gapCount).map { k in
+
+            let centre = self.r1 + Double(k + 1) * t + (Double(k) + 0.5) * spacing
+
+            return (radius: centre,
+                    capacitance: ε0 * εPaper * 2.0 * π * centre * (h + 2.0 * spacing) / spacing,
+                    spacing: spacing)
+        }
+    }
+
     /// How the turns of a LAYER winding are shared out over its layers, innermost layer first.
     ///
     /// EVERY LAYER HOLDS THE SAME NUMBER OF TURNS, N/L, AND THAT NUMBER IS NOT IN GENERAL A WHOLE ONE. 938 turns over 12 layers is

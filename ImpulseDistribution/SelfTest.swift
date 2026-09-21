@@ -3099,6 +3099,17 @@ enum SelfTest {
                                    turnToTurn.insulation * 1000.0)
                 }
 
+                // A sheet winding's equal-spacing convention, beside the placed-duct answer. Printed, never asserted: it is a client's
+                // convention and not a claim about the physics.
+                if let equal = contents.equalSpacing {
+
+                    text += String(format: "    equal spacing on the same coil: %.3f mm per gap, worst ΔV %g V at gap %d, %.1f%% of allowable across the plain-gap paper\n",
+                                   equal.spacing * 1000.0,
+                                   equal.worstDeltaV,
+                                   equal.worstIndex + 1,
+                                   equal.utilization * 100.0)
+                }
+
                 // The independent check on a layer solve, and the reason it is printed rather than asserted: alpha/tanh(alpha) comes
                 // from the coil's LUMPED Cs and Cg while the profile comes from a turn-level network, so agreement is real evidence
                 // that the network is assembled right. They are not the same quantity - see the note in BuildRadialProfile - so a
