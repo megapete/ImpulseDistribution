@@ -100,6 +100,26 @@ struct BasicSectionWindingData:Codable, Sendable {
     }
     
     let turn:TurnData
+
+    /// What a multi-start winding needs for DelVecchio 12.12 and nothing else does. Nil for every other winding type.
+    ///
+    /// A multi-start winding is N_s helical windings ("starts") wound together as one helix and connected in series outside it. Each
+    /// revolution of the helix is a GROUP of N_s conductors lying axially side by side, one from each start, and the groups are
+    /// separated from each other by the helix's key spacers. The two kinds of interface therefore differ: conductors inside a group
+    /// touch paper to paper, while one group faces the next across an oil gap. See Segment.MultiStartSeriesCapacitance.
+    struct MultiStartData:Codable {
+
+        /// N_s, the number of starts - the design file's axial cables per turn (`TurnDefinition.multistartLoops`)
+        let numStarts:Int
+        /// Solid insulation between two adjacent conductors of one group, over and above their own paper - the design file's
+        /// internal turn insulation between axial cables. TWO-SIDED like every other insulation figure here; 0 if they simply touch.
+        let insulationBetweenStarts:Double
+        /// The key-spacer (oil) gap between one group and the next, already shrunk the way the disc windings' gaps are. 0 if the
+        /// groups are wound touching.
+        let gapBetweenGroups:Double
+    }
+
+    var multiStart:MultiStartData? = nil
 }
 
 /// This struct defines  the most basic definitiion of a coil section. There are no "electrical" functions defined for the struct. It is basically just used to describe the physical and electrical characteristics of a coil section (either a single disc or a single layer). 

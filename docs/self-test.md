@@ -307,3 +307,13 @@ scenario's jumpers. The **REGULATING WINDINGS** section lists the nine jumpers m
 again makes none, and that changing it to 1 loop and back removes and restores all nine. The run must print the same
 `Connectivity:` line as `T0223-tap-parallel`; see `docs/connectors-and-nodes.md`.
 
+## `T0223-multistart`: the first model with a multi-start winding
+
+No design in the fixture set has one, so `T0223_MS_AndIn.txt` (kept in `~/Documents/MyProjects/Claude/T223/`) is `T0223_AndIn.txt`
+with **coil 3's column edited** and nothing else: turns 71 → 48 (lines 11-13), spiral N → Y (15), double-stack Y → N (16),
+multi-start N → Y (17), axial sections 32 → 1 (18), axial cables 1 → 8 (28), strand axial 0.375″ → 0.25″ (32). That is 8 starts of
+6 turns, keeping T0223's 0.118″ × 1.5″ key spacers (20 columns) between revolutions. **The file's lines end in `\n\r`**, so edit it
+with something that preserves them. Coil 2 is impulsed at the top and grounded at the bottom, coil 3's bottom is jumpered to that
+neutral and its top is free, and coil 3 is declared a regulating winding, which must make no jumpers and must not fail. The run goes
+through the transient; coil 3's `Series C (coil)` is 12.12's C_ms (1.221319e-9 F), checked by hand in `docs/capacitance.md`.
+

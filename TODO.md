@@ -34,12 +34,13 @@ fail.
 - Interleaved discs use **Veverka eq. 6.4** (`Cs = Ctt·(N−1)`, halved by the caller), not DelVecchio, who
   covers only wound-in-shields and multi-start in ch. 12. It also drops the (N−1)/N voltage-fraction
   argument that 12.48 applies to plain discs — see the comment in `BasicSectionSeriesCapacitance`.
-- **Multi-start (DV 12.12)** — unimplemented. A `.multistart` BasicSection type exists and is produced by
-  `AppController` from the design file, but `CapacitanceTurnToTurn` throws `.UnimplementedWdgType` for it.
-  **Settled 2026-09-22: it stays one lumped section** (`docs/decisions.md` §2c), so 12.12 is the whole of
-  what is left. The loop count it needs is already known: it is the `numLoops` of a regulating-winding
-  declaration (`RegulatingWinding.swift`), and the design file's own `turnDefinition.multistartLoops`
-  is what the declaration dialog opens on.
+- **Multi-start (DV 12.12)** — **implemented 2026-09-22**, as one lumped section (`docs/decisions.md` §2c)
+  — see `docs/capacitance.md`. Two things remain. The design file's turn count is *taken* to be every turn
+  in series (all starts), on the evidence of its turn definition; no multi-start design has been checked
+  against that, and a count that does not divide by the starts is refused so the other reading cannot
+  pass silently. And nothing screens a multi-start winding's own turn-to-turn stress — at up to 2ΔV_s
+  between neighbours it is the one number a designer most wants from this winding (`DielectricStress`
+  covers disc, sheet and layer only).
 
 #### 2b. Cross-check against Kulkarni & Khaparde §7.3 — **closed 2026-08-06**
 

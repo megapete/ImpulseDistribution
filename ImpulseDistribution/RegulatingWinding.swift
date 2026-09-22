@@ -39,8 +39,9 @@
 //  * MULTI-START. The loops are wound side by side, turn beside turn, each over the whole height of the winding, and the end
 //    of each loop is tied to the start of the next. The program models the whole winding as ONE lumped BasicSection, so
 //    none of those tie points is a node and there is nothing to connect: the joins are implicit in DelVecchio 12.12's series
-//    capacitance, where each turn lies beside a turn one loop-voltage away. The declaration records the loop count for that
-//    formula. (12.12 is not implemented yet - TODO.md item 2 - so CapacitanceTurnToTurn still refuses the winding type.)
+//    capacitance, where each turn lies beside a turn one loop-voltage away (Segment.MultiStartSeriesCapacitance). The loop count
+//    is NOT the user's here: the loops are the starts, which are the design file's axial cables per turn and are what 12.12 is
+//    computed from, so the dialog shows that number and does not let it be edited.
 //
 //  * SINGLE STACK. Every tap lead goes out to the tap changer and none is tied to another inside the winding, so there are
 //    no permanent connections either. The declaration is still worth having: it is what the tap connection scenarios

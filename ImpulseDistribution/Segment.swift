@@ -768,6 +768,7 @@ actor Segment: Equatable /*, Hashable */ {
             case IllegalWindingType
             case IllegalInterleavedType
             case IllegalWoundInShield
+            case IllegalMultiStart
         }
         
         /// Specialized information that can be added to the descritpion String (can be the empty string)
@@ -815,6 +816,10 @@ actor Segment: Equatable /*, Hashable */ {
                 else if self.type == .IllegalWoundInShield {
 
                     return "Illegal wound-in shield: \(info)"
+                }
+                else if self.type == .IllegalMultiStart {
+
+                    return "Multi-start winding (DelVecchio 12.12): \(info)"
                 }
 
                 return "An unknown error occurred."
@@ -1269,6 +1274,12 @@ actor Segment: Equatable /*, Hashable */ {
                 // That Cs is now the EXACT series chain 1/Σ(1/C_k) over the coil's gaps rather than a formula in one representative
                 // turn-to-turn capacitance - see BasicSectionSeriesCapacitance. Nothing here has to change for it: the chain is the
                 // same quantity, computed without the averaging.
+                return Cs
+            }
+            else if self.wdgType == .multistart {
+
+                // The whole winding is one lumped section and 12.12 already counts every interface in it, so - as for a sheet - Cs is
+                // the whole answer. What lies across 'radialGaps' is another coil, a shunt path handled in PhaseModel.
                 return Cs
             }
             else if self.wdgType == .helical {
@@ -2074,6 +2085,12 @@ actor Segment: Equatable /*, Hashable */ {
             return 0.0
         }
 
+        // A multi-start winding is one lumped section whose whole series capacitance is DelVecchio 12.12 - see the routine.
+        if self.wdgType == .multistart {
+
+            return try self.MultiStartSeriesCapacitance()
+        }
+
         // A SHEET WINDING IS A SERIES CHAIN AND ITS SERIES CAPACITANCE IS EXACT, so it does not go through the "Ctt times a function
         // of N" shape below at all.
         //
@@ -2158,6 +2175,256 @@ actor Segment: Equatable /*, Hashable */ {
         }
         
         throw SegmentError(info: "", type: .UnimplementedWdgType)
+    }
+
+    // MARK: Multi-start windings (DelVecchio 12.12)
+
+    /// The series capacitance of a whole multi-start winding, DelVecchio 12.12, with the one refinement his text invites.
+    ///
+    /// THE WINDING. N_s helical windings ("starts") of n turns each, wound together as one helix and connected in series outside it,
+    /// start 1's end to start 2's beginning and so on (Figure 12.21). Each revolution of the helix is a GROUP of N_s conductors lying
+    /// axially side by side, one from each start, and the starts are meshed within a group in the order of Figure 12.22 -
+    /// `MultiStartGroupOrder` - so that no two neighbours are more than two start-voltages apart. The program models the whole winding
+    /// as ONE lumped BasicSection (docs/decisions.md §2c), so this is the series capacitance between its two terminals.
+    ///
+    /// THE ENERGY (12.110). With ΔV_s = V/N_s the voltage along one start and ½·c·ΔV² the energy of an adjacent pair, Figure 12.22's
+    /// pattern gives, over the n groups:
+    ///
+    ///     (2n − 1) pairs at ΔV_s       and       n(N_s − 2) pairs at 2ΔV_s
+    ///
+    /// and with a single c_t for every pair, E = ½·c_t·ΔV_s²·(4nN_s − 6n − 1), so writing E = ½·C·V²
+    ///
+    ///     C_ms = c_t·(4nN_s − 6n − 1)/N_s²                                                    (12.111)
+    ///
+    /// THE REFINEMENT. DelVecchio notes that "c_t will depend on the insulation structure of the winding, that is, whether the turns are
+    /// touching, paper to paper ... or whether there is an oil gap with key spacers separating them". In a multi-start helix it is BOTH,
+    /// and which applies is fixed by where the pair sits. Of the (2n − 1) pairs at ΔV_s, n lie INSIDE a group (the two middle starts of
+    /// the order, e.g. 3|4 in 1,3,4,2) and n − 1 lie BETWEEN groups (the last start of one revolution against the first of the next, 2|1);
+    /// all n(N_s − 2) pairs at 2ΔV_s lie inside a group. So with c_g for a pair inside a group and c_k for a pair across the key spacers:
+    ///
+    ///     E = ½·ΔV_s²·[ c_g·n·(1 + 4(N_s − 2)) + c_k·(n − 1) ] = ½·ΔV_s²·[ c_g·n·(4N_s − 7) + c_k·(n − 1) ]
+    ///
+    /// which is exactly 12.110 when c_g = c_k: n(4N_s − 7) + (n − 1) = 4nN_s − 6n − 1.
+    ///
+    /// ONE ROUNDING OF DELVECCHIO'S IS UNDONE. A pair between groups - start 2, turn j against start 1, turn j + 1 - is n − 1 turns
+    /// apart, not n: its true voltage is (1 − 1/n)·ΔV_s, and the book counts it as ΔV_s. Every pair inside a group IS exactly ΔV_s or
+    /// 2ΔV_s (same turn index, one or two starts apart). With the true voltage the between-group energy is c_k·(n − 1)·(1 − 1/n)², so
+    ///
+    ///     C_ms = [ c_g·n·(4N_s − 7) + c_k·(n − 1)³/n² ] / N_s²
+    ///
+    /// This is the same choice this file makes for interleaved discs, where Kulkarni & Khaparde's exact 7.39 is used rather than its
+    /// N ≫ 1 limit 7.40, and for the same reason: the rounding is worst exactly where few turns make it matter. With a single c_t,
+    /// 12.111 overstates C_ms by 33% at N_s = 2, n = 2 and 8.3% at N_s = 2, n = 12; by 4.1% to 1.5% at N_s = 4 (n = 2 to 12); and by 1.5%
+    /// to 0.6% at N_s = 8 - the between-group pairs carry the largest share of the energy when there are few starts and few turns.
+    /// Setting (1 − 1/n)² to 1 and c_g = c_k gives back 12.111 exactly.
+    ///
+    /// `VerifyMultiStartCapacitance` walks the conductors one by one at their true potentials and checks the pair counts, this
+    /// closed form, and the reduction to 12.111.
+    ///
+    /// - Parameter turnsPerStart: n. Must be at least 1.
+    /// - Parameter numStarts: N_s. Must be at least 2 - a single start is an ordinary helical winding, and 12.111 goes negative there.
+    /// - Parameter cWithinGroup: c_g, farads, between two touching conductors of one revolution.
+    /// - Parameter cBetweenGroups: c_k, farads, between one revolution and the next across the key spacers.
+    /// - Returns: C_ms, farads.
+    static func MultiStartCapacitance(numStarts:Int, turnsPerStart:Int, cWithinGroup:Double, cBetweenGroups:Double) -> Double {
+
+        let Ns = Double(numStarts)
+        let n = Double(turnsPerStart)
+
+        // (n − 1)·(1 − 1/n)² = (n − 1)³/n²: n − 1 between-group pairs, each at (1 − 1/n)·ΔV_s. Zero for a single turn per start.
+        let betweenGroupPairs = (n - 1.0) * (n - 1.0) * (n - 1.0) / (n * n)
+
+        return (cWithinGroup * n * (4.0 * Ns - 7.0) + cBetweenGroups * betweenGroupPairs) / (Ns * Ns)
+    }
+
+    /// The order in which the N_s starts lie within one revolution of a multi-start helix, bottom to top - DelVecchio Figure 12.22.
+    ///
+    /// His rule ("start with turn 1 from start coil 1. Put turn 1 from start coil 2 at the end of the group. Put turn 1 from start coil 3
+    /// below turn 1 ...") comes out as the odd starts ascending followed by the even starts descending: 1,3,4,2 for N_s = 4, 1,3,5,4,2
+    /// for 5, 1,3,5,6,4,2 for 6. That puts every pair of neighbours two starts apart except the two in the middle, and puts start 2 at the
+    /// top of the group, one start below start 1 at the bottom of the next.
+    static func MultiStartGroupOrder(numStarts:Int) -> [Int] {
+
+        guard numStarts >= 1 else {
+
+            return []
+        }
+
+        let odds = Array(stride(from: 1, through: numStarts, by: 2))
+        let evens = Array(stride(from: 2, through: numStarts, by: 2)).reversed()
+
+        return odds + evens
+    }
+
+    /// The series capacitance of this Segment's multi-start winding: `MultiStartCapacitance` with c_g and c_k formed from the geometry.
+    ///
+    /// c_g, TWO CONDUCTORS OF ONE REVOLUTION, touching paper to paper. This is DelVecchio's turn-to-turn capacitance 12.47,
+    /// ε0·εp·π(r1 + r2)·(h + 2τ)/τ, turned on its side the way the layer branch of CapacitanceTurnToTurn does: in a helix the
+    /// neighbouring conductor is ABOVE, so the face is the conductor's bare radial dimension w rather than its bare height. τ is the
+    /// two-sided paper of a turn plus any extra insulation the design puts between the axial cables of a turn.
+    ///
+    /// c_k, ONE REVOLUTION AGAINST THE NEXT, across the key spacers. This is exactly the gap the helical branch of SeriesCapacitance
+    /// already treats between the turns of an ordinary helix, and it is treated the same way: DelVecchio's disc-to-disc 12.52 over the
+    /// winding's annulus, key-spacer fraction and all, which with a zero spacer collapses to plain paper to paper.
+    ///
+    /// THE TURN COUNT IS THE WHOLE WINDING'S. BasicSection.N is the design file's turns, and for a multi-start winding that file counts
+    /// one CONDUCTOR of one start as a turn - its turn definition divides the axial dimension of the N_s cables of a revolution by N_s
+    /// (TurnDefinition.axialDimension). So N is every turn in series, all starts included, and n = N/N_s. A count that does not divide
+    /// by N_s is refused rather than rounded: it is the sign that a design counts its turns the other way, and n would be wrong by N_s.
+    func MultiStartSeriesCapacitance() throws -> Double {
+
+        let bs = self.basicSections[0]
+
+        guard let multiStart = bs.wdgData.multiStart else {
+
+            throw SegmentError(info: "the section carries no multi-start data (number of starts, spacer gap)", type: .IllegalMultiStart)
+        }
+
+        // DelVecchio's winding is a single helix. A multi-start winding of several radial layers would also have layer-to-layer energy
+        // between starts at unrelated potentials, which 12.12 does not describe; say so rather than return half an answer.
+        guard bs.wdgData.layers.numLayers <= 1 else {
+
+            throw SegmentError(info: "\(bs.wdgData.layers.numLayers) radial layers; 12.12 describes a single helix", type: .IllegalMultiStart)
+        }
+
+        let Ns = multiStart.numStarts
+
+        guard Ns >= 2 else {
+
+            throw SegmentError(info: "\(Ns) start(s); a multi-start winding needs at least 2", type: .IllegalMultiStart)
+        }
+
+        let nExact = bs.N / Double(Ns)
+        let n = nExact.rounded()
+
+        guard n >= 1.0, abs(nExact - n) < 1.0E-6 else {
+
+            throw SegmentError(info: "\(bs.N) turns do not divide among \(Ns) starts. The design file's turns should be every turn in series, all starts included", type: .IllegalMultiStart)
+        }
+
+        // Two-sided paper, as everywhere else in this file (docs/capacitance.md: the τ_p convention). w is the conductor's bare radial
+        // dimension: the turn's over-paper radial dimension less its two-sided paper, the transposed twin of the disc branch's
+        // 'height - tp'.
+        let tp = bs.wdgData.turn.turnInsulation
+        let tau = tp + multiStart.insulationBetweenStarts
+        let w = bs.wdgData.turn.radialDimn - tp
+
+        guard tau > 0.0, w > 0.0 else {
+
+            throw SegmentError(info: "the turn has no paper (\(tau) m) or no bare radial copper (\(w) m)", type: .IllegalMultiStart)
+        }
+
+        let cWithinGroup = ε0 * εPaper * π * (self.r1 + self.r2) * (w + 2.0 * tau) / tau
+
+        // DiscToDiscSeriesCapacitance reads a zero gap as "no neighbour" and returns 0, which is right for a disc at a coil end and
+        // wrong here: revolutions wound with no spacer between them are touching, paper to paper, exactly like two conductors of one
+        // revolution but without the extra insulation between starts. So that case is c_g's formula with τ = τ_p.
+        let gap = multiStart.gapBetweenGroups
+        let cBetweenGroups:Double
+
+        if gap > 0.0 {
+
+            cBetweenGroups = Segment.DiscToDiscSeriesCapacitance(belowGap: gap, aboveGap: gap, basicSection: bs, innerRadius: self.r1, outerRadius: self.r2).below
+        }
+        else {
+
+            cBetweenGroups = ε0 * εPaper * π * (self.r1 + self.r2) * (w + 2.0 * tp) / tp
+        }
+
+        return Segment.MultiStartCapacitance(numStarts: Ns, turnsPerStart: Int(n), cWithinGroup: cWithinGroup, cBetweenGroups: cBetweenGroups)
+    }
+
+    /// Self-check for 12.12, run by hand because this program has no test target:
+    ///
+    ///     open -a ImpulseDistribution --args -PCH_Verify YES
+    ///     defaults read com.huberistech.ImpulseDistribution MultiStartCapacitanceVerification
+    ///
+    /// It walks a multi-start helix conductor by conductor - every start's every turn, in the order of Figure 12.22, at its true
+    /// potential - and checks three things: that the pair counts the derivation relies on are the ones the order actually produces;
+    /// that the energy summed pair by pair equals `MultiStartCapacitance` to rounding error; and that the same walk with DelVecchio's
+    /// rounding of the between-group pairs and a single c_t reproduces 12.111 exactly. It reports how much that rounding overstates.
+    static func VerifyMultiStartCapacitance() -> [String] {
+
+        var report:[String] = []
+        var failures = 0
+
+        // Arbitrary but unequal, so that a c_g/c_k mix-up cannot cancel; and a single c_t for the book's own form.
+        let cg = 3.1E-10
+        let ck = 1.7E-10
+        let ct = 2.3E-10
+
+        for Ns in 2...8 {
+
+            for n in [1, 2, 5, 12] {
+
+                // Conductor potentials in units of one turn's voltage: start s's turns run from (s − 1)·n + 1 to s·n.
+                let order = MultiStartGroupOrder(numStarts: Ns)
+                var conductors:[(potential:Double, group:Int)] = []
+
+                for j in 1...n {
+
+                    for s in order {
+
+                        conductors.append((potential: Double((s - 1) * n + j), group: j))
+                    }
+                }
+
+                let deltaVs = Double(n)
+                var withinOnes = 0
+                var withinTwos = 0
+                var withinOther = 0
+                var between = 0
+                var exactEnergy = 0.0
+                var bookEnergy = 0.0
+                var bookEnergyExactVoltages = 0.0
+
+                for i in 0..<(conductors.count - 1) {
+
+                    let dV = abs(conductors[i + 1].potential - conductors[i].potential)
+
+                    if conductors[i].group == conductors[i + 1].group {
+
+                        if dV == deltaVs { withinOnes += 1 } else if dV == 2.0 * deltaVs { withinTwos += 1 } else { withinOther += 1 }
+
+                        exactEnergy += 0.5 * cg * dV * dV
+                        bookEnergy += 0.5 * ct * dV * dV
+                    }
+                    else {
+
+                        between += 1
+                        exactEnergy += 0.5 * ck * dV * dV
+                        // DelVecchio counts every between-group pair as a full ΔV_s.
+                        bookEnergy += 0.5 * ct * deltaVs * deltaVs
+                    }
+
+                    bookEnergyExactVoltages += 0.5 * ct * dV * dV
+                }
+
+                // V across the winding is N_s·n turns; C = 2E/V².
+                let V = Double(Ns * n)
+                let fromWalk = 2.0 * exactEnergy / (V * V)
+                let closedForm = MultiStartCapacitance(numStarts: Ns, turnsPerStart: n, cWithinGroup: cg, cBetweenGroups: ck)
+
+                let dv12_111 = ct * Double(4 * n * Ns - 6 * n - 1) / Double(Ns * Ns)
+                let bookFromWalk = 2.0 * bookEnergy / (V * V)
+                let exactSingleC = 2.0 * bookEnergyExactVoltages / (V * V)
+
+                let countsOK = withinOnes == n && withinTwos == n * (Ns - 2) && withinOther == 0 && between == n - 1
+                let energyOK = abs(fromWalk - closedForm) <= 1.0E-12 * closedForm
+                let reduces = abs(bookFromWalk - dv12_111) <= 1.0E-12 * dv12_111
+                let singleCOK = abs(MultiStartCapacitance(numStarts: Ns, turnsPerStart: n, cWithinGroup: ct, cBetweenGroups: ct) - exactSingleC) <= 1.0E-12 * exactSingleC
+
+                let passed = countsOK && energyOK && reduces && singleCOK
+
+                if !passed { failures += 1 }
+
+                report.append(String(format: "%@ N_s = %d, n = %2d: pairs %d/%d/%d (within ΔVs / within 2ΔVs / between), walk vs closed form %.2e, 12.111 %@, 12.111 overstates by %+.3f%%", passed ? "PASS" : "FAIL", Ns, n, withinOnes, withinTwos, between, abs(fromWalk - closedForm) / closedForm, reduces ? "reproduced" : "NOT reproduced", 100.0 * (dv12_111 - exactSingleC) / exactSingleC))
+            }
+        }
+
+        report.insert("Segment.VerifyMultiStartCapacitance: \(failures == 0 ? "all passed" : "\(failures) FAILED")", at: 0)
+
+        return report
     }
 
     /// The series capacitance of one wound-in-shield DISC PAIR, per DelVecchio 12.96, but WITHOUT its disc-disc term. The caller

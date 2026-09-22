@@ -392,7 +392,10 @@ enum SelfTest {
 
         // T0223-tap-parallel again, with coil 3's nine paralleling jumpers made by DECLARING it a regulating winding rather than
         // by listing them. Must print the same Connectivity line as T0223-tap-parallel. See RegulatingWinding.swift.
-        "T0223-tap-declared" : T0223TapParallel(name: "T0223-tap-declared", neutralTie: .outerEnds, declared: true)
+        "T0223-tap-declared" : T0223TapParallel(name: "T0223-tap-declared", neutralTie: .outerEnds, declared: true),
+
+        // T0223 with coil 3 rebuilt as an 8-start MULTI-START tap winding - the first model here with one in it. See T0223MultiStart.
+        "T0223-multistart" : T0223MultiStart(name: "T0223-multistart")
     ]
 
     /// The T0223 fixture: four coils, of which coil 1 is a 17-turn SHEET winding with two 0.25" cooling ducts in it and 0.010"
@@ -535,6 +538,42 @@ enum SelfTest {
                         reportNodes: true)
     }
 
+
+    /// T0223 with coil 3 turned into a MULTI-START tap winding, so that DelVecchio 12.12 runs through the whole pipeline.
+    ///
+    /// No design in the fixture set has a multi-start winding, so this one is made by editing T0223's design file: coil 3's column
+    /// becomes a spiral, not double-stacked, multi-start winding of 48 turns in 8 starts (6 turns per start), one 0.25" x 0.085"
+    /// conductor per start, keeping T0223's 0.118" x 1.5" key spacers (20 columns) between revolutions. Nothing else in the design
+    /// changes. The file is `T0223_MS_AndIn.txt`; docs/self-test.md says how it was derived from `T0223_AndIn.txt`.
+    ///
+    /// The wiring is the ordinary one for a tap winding hanging off an HV neutral: coil 2 impulsed at the top and grounded at the
+    /// bottom, coil 3's bottom tied to that neutral and its top left free. Coil 3 is also DECLARED a regulating winding, which for a
+    /// multi-start winding must make no connections at all (it is one lumped section) and must not fail.
+    ///
+    /// What to read in the report: coil 3's series capacitance, which is 12.12's C_ms and until 2026-09-22 threw
+    /// `.UnimplementedWdgType` and stopped the run in CalculateCapacitanceMatrix.
+    private static func T0223MultiStart(name:String) -> Scenario {
+
+        return Scenario(name: name,
+                        restructure: .none,
+                        matchedBuild: nil,
+                        fixtureName: "T0223_MS_AndIn.txt",
+                        notes: "T0223 with coil 3 rebuilt as a multi-start tap winding: 48 turns in 8 starts (6 per start), one 0.25\" x 0.085\" conductor per start, 0.118\" key spacers between revolutions. Coils 0 and 1 grounded at both ends; 125 kV full wave on coil 2's top, coil 2's bottom grounded and carrying coil 3's bottom; coil 3's top free.",
+                        jumpers: [Jumper(from: .coilEnd(coil: 3, end: .bottom), to: .coilEnd(coil: 2, end: .bottom))],
+                        regulatingWindings: [RegulatingWinding(coil: 3, numLoops: 8)],
+                        terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 0, end: .top), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .top), type: .ground),
+                                       Termination(point: .coilEnd(coil: 2, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 2, end: .top), type: .impulse)],
+                        waveFormType: .FullWave,
+                        peakVoltage: 125.0e3,
+                        displaySpan: 100.0e-6,
+                        bandwidth: 10.0e6,
+                        continuumCoil: 2,
+                        reportNodes: true)
+    }
 
     /// The S0738 tap winding re-wired from series to parallel by EDITING the model, the way it is done at the keyboard.
     ///

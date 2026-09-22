@@ -123,8 +123,9 @@ to keep the whole winding as the single `.multistart` BasicSection `AppControlle
 need new geometry and a new capacitance between sub-sections that interpenetrate. DelVecchio 12.12 is written for exactly the
 lumped case: the ties are implicit in its series capacitance, where each turn lies beside a turn one loop-voltage away. So a
 multi-start regulating winding has **no permanent connections to make** — its declaration only records the loop count for 12.12
-— and the double-stacked disc winding is the only arrangement for which a declaration puts jumpers on. 12.12 itself is still open
-(`TODO.md` §2).
+— and the double-stacked disc winding is the only arrangement for which a declaration puts jumpers on. 12.12 was implemented the
+same day on the lumped section (`Segment.MultiStartSeriesCapacitance`, `docs/capacitance.md`), and the number of starts it uses is
+the design file's axial cables per turn, which is also what the declaration's loop count is fixed to.
 
 ---
 

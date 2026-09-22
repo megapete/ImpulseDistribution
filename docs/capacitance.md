@@ -19,6 +19,7 @@ done 2026-08-02/03; see `TODO.md` for what is still known to deviate.
 | wound-in shields | DV 12.96-99 | `Segment.WoundInShieldSeriesCapacitance`, `.WoundInShieldPairCapacitance` |
 | shield wire paper | τ_w = τ_p (see below) | `Segment.WoundInShieldWire.Standard` |
 | C_ll layer-layer | DV 12.60-61, transposed | `Segment.LayerToLayerCapacitance` |
+| multi-start, whole winding | DV 12.12 (12.110-111), c_g/c_k split, exact between-group voltage | `Segment.MultiStartSeriesCapacitance`, `.MultiStartCapacitance` |
 | coil-to-coil ground capacitance | DV 12.60-61 | `PhaseModel.CoilInnerShuntCapacitance` |
 | coil-to-tank, phase-to-phase | K&K 7.15 (+ App. D.28/D.30) | `PhaseModel.OuterShuntCapacitance` |
 
@@ -117,6 +118,35 @@ passes 1, because every turn in its discs is a coil turn.
   Because the pair is the unit, **a shield can only exist inside a Segment that holds an even number of discs** — `SeriesCapacitanceUnits()` emits units within one Segment, so a pair straddling two Segments is not representable. The load path gives every disc its own Segment, so `AppController.doAddWoundInShields` **rebuilds an odd selection into two-disc Segments** (flatten → pair → `updateModel(oldSegments:newSegments:)`), exactly as `doInterleaveSelection` does, and sets the shield on each new Segment *before* handing it to `updateModel` so the geometry and matrices are recomputed once rather than twice. A selection whose Segments are already all-even is left structurally alone. `validateMenuItem` therefore accepts **either** an even segment count (rebuild path) **or** all-even disc counts (no rebuild); testing only one of the two disabled the item on, respectively, every freshly loaded model and every already-combined Segment.
 - **Only the two end units of a segment can be at a coil end or beside a static ring**, and only on their outward face. The recursion passes a non-nil tuple with the far side cleared, so both the `endDisc` and `adjStaticRing` tests need the `!= (false, false)` guard — a missing one on the static-ring side was a real bug.
 - **`.sheet` correctly has no shunt term**; `.layer` genuinely needs one. A sheet winding is a single BasicSection spanning the full height, so its radial neighbours are *other coils* (a shunt path, handled in `PhaseModel`), whereas adjacent *layers* belong to the same winding at different potentials and are true series energy. Layer windings use the "Huber method" — DelVecchio's disc treatment turned on its side, with C_dd → C_ll — and are outside the book entirely.
+
+## Multi-start windings (DV 12.12)
+
+A multi-start winding is **one lumped BasicSection** (`docs/decisions.md` §2c) and its whole series capacitance is 12.12, from
+`Segment.MultiStartSeriesCapacitance`. N_s is the design file's axial cables per turn, carried in `BasicSectionWindingData.multiStart`
+with the insulation between starts and the key-spacer gap between revolutions. Three things differ from the printed 12.111,
+`C_ms = c_t(4nN_s − 6n − 1)/N_s²`, and each is deliberate:
+
+- **Two turn-to-turn capacitances, not one.** DelVecchio says c_t depends on whether turns touch paper to paper or face across an oil
+  gap with key spacers; in a multi-start helix it is both, fixed by position. Conductors of one revolution touch: **c_g** is 12.47
+  transposed (face = bare radial w, as the layer branch of `CapacitanceTurnToTurn` does), with τ = τ_p + the insulation between
+  starts. One revolution faces the next across the spacers: **c_k** is 12.52, the treatment the helical branch already gives the gap
+  between helical turns. Of the (2n − 1) pairs at ΔV_s, n are inside a revolution and n − 1 between; all n(N_s − 2) pairs at 2ΔV_s are
+  inside. With c_g = c_k the sum is 12.110 term for term. A zero spacer is handled separately: `DiscToDiscSeriesCapacitance` reads a
+  zero gap as *no neighbour* and returns 0.
+- **The between-revolution voltage is exact.** Those pairs are n − 1 turns apart, (1 − 1/n)·ΔV_s; the book rounds to ΔV_s. Same choice
+  as K&K 7.39 over 7.40 for interleaving, same reason: the rounding makes 12.111 up to 33% high at N_s = 2, n = 2, 1.5–4% at N_s = 4,
+  under 1.5% at N_s = 8.
+- **n = N/N_s, and a count that does not divide is refused.** The design file's turn definition divides the axial dimension of a
+  revolution's N_s cables by N_s, i.e. it counts one conductor of one start as a turn, so its turns are every turn in series. If a
+  design counted the other way n would be N_s times too small; refusing a non-integer n catches most such files.
+
+`Segment.VerifyMultiStartCapacitance()` (under `-PCH_Verify YES`, key `MultiStartCapacitanceVerification`) walks N_s = 2…8 and
+n = 1, 2, 5, 12 conductor by conductor in Figure 12.22's order at true potentials: it checks the pair counts, the closed form against
+the walk (to 1e-12), and that the walk with the book's rounding and one c_t gives 12.111 exactly. End to end, SelfTest
+**`T0223-multistart`** (T0223 with coil 3 made an 8-start, 48-turn multi-start) gives C_ms = 1.2213e-9 F, which a hand calculation
+from the design data reproduces to six figures; c_k there is 8% of c_g, and 12.111 with c_t = c_g would be 3.1% higher. Not
+reached yet: a multi-start winding of more than one radial layer (refused — 12.12 is a single helix) and any turn-to-turn stress
+screen for this winding type (`TODO.md` §2).
 
 ## Verification is by hand
 

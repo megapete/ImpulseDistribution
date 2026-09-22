@@ -61,7 +61,7 @@ class RegulatingWindingDialog: NSObject {
             alert.informativeText = "Double-stacked, \(self.numDiscs) discs (\(self.numDiscs / 2) per stack). The two stacks are paralleled: the outer ends are tied together, the two centre leads are tied together, and every tap point is tied to its mirror image in the other stack."
 
         case .multiStart:
-            alert.informativeText = "Multi-start. The loops are wound side by side over the whole height, and the program models the winding as a single lumped section, so the ties between one loop and the next are inside that section rather than connections of their own."
+            alert.informativeText = "Multi-start, \(self.initialLoops) starts. The loops are wound side by side over the whole height, and the program models the winding as a single lumped section, so the ties between one loop and the next are inside that section rather than connections of their own. Its series capacitance is DelVecchio 12.12, computed from the design file's starts - which is why the loop count here is the design file's and cannot be changed."
 
         case .singleStack:
             alert.informativeText = "Single stack, \(self.numDiscs) disc(s). Every tap lead goes out to the tap changer, so nothing inside the winding is tied together permanently."
@@ -130,6 +130,13 @@ class RegulatingWindingDialog: NSObject {
         loopsBox.spacing = 2.0
 
         self.connectionsValue.preferredMaxLayoutWidth = 300.0
+
+        // A multi-start winding's loops are its starts, read from the design file (see the informative text).
+        if self.arrangement == .multiStart {
+
+            self.loopsField.isEnabled = false
+            self.loopsStepper.isEnabled = false
+        }
 
         var rows:[[NSView]] = [[NSTextField(labelWithString: self.arrangement == .doubleStack ? "Tapping loops per stack:" : "Tapping loops:"), loopsBox]]
 

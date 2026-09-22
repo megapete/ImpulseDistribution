@@ -1476,7 +1476,17 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
                 
                 let turnData = BasicSectionWindingData.TurnData(radialDimn: nextWinding.turnDefinition.radialDimension, axialDimn: nextWinding.turnDefinition.axialDimension, turnInsulation: nextWinding.turnDefinition.cable.strandInsulation + nextWinding.turnDefinition.cable.insulation, resistancePerMeter: nextWinding.turnDefinition.resistancePerMeterAt20C, strandRadial: nextWinding.turnDefinition.cable.strandRadialDimension, strandAxial: nextWinding.turnDefinition.cable.strandAxialDimension)
                 
-                let newBasicSection = BasicSection(location: LocStruct(radial: radialPos, axial: axialPos), N: nextWinding.numTurns.max, I: nextWinding.I, wdgData: BasicSectionWindingData(type: bsWdgType, discData: BasicSectionWindingData.DiscData(numAxialColumns: nextWinding.numAxialColumns, axialColumnWidth: nextWinding.spacerWidth), layers: layerData, turn: turnData), rect: NSRect(x: nextWinding.innerDiameter / 2.0, y: axialCenter - nextWinding.electricalHeight / 2.0, width: nextWinding.electricalRadialBuild, height: nextWinding.electricalHeight))
+                // A multi-start winding's starts are its axial cables, and the spacer between one revolution of the helix and the next is
+                // the design file's radial spacer - the same field a disc winding's disc-to-disc gap comes from, shrunk by the same 0.98.
+                // Only 12.12 reads this; see BasicSectionWindingData.MultiStartData.
+                var multiStartData:BasicSectionWindingData.MultiStartData? = nil
+
+                if bsWdgType == .multistart {
+
+                    multiStartData = BasicSectionWindingData.MultiStartData(numStarts: nextWinding.turnDefinition.multistartLoops, insulationBetweenStarts: nextWinding.turnDefinition.axialGapBetweenCables, gapBetweenGroups: nextWinding.stdAxialGap * 0.98)
+                }
+
+                let newBasicSection = BasicSection(location: LocStruct(radial: radialPos, axial: axialPos), N: nextWinding.numTurns.max, I: nextWinding.I, wdgData: BasicSectionWindingData(type: bsWdgType, discData: BasicSectionWindingData.DiscData(numAxialColumns: nextWinding.numAxialColumns, axialColumnWidth: nextWinding.spacerWidth), layers: layerData, turn: turnData, multiStart: multiStartData), rect: NSRect(x: nextWinding.innerDiameter / 2.0, y: axialCenter - nextWinding.electricalHeight / 2.0, width: nextWinding.electricalRadialBuild, height: nextWinding.electricalHeight))
                 
                 result.append(newBasicSection)
             }
@@ -4328,17 +4338,16 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
 
             var initialLoops = existing?.numLoops ?? 1
 
-            if existing == nil {
+            if arrangement == .multiStart {
 
-                if arrangement == .doubleStack {
+                // Not the user's to choose: a multi-start winding's loops ARE its starts, which are the design file's axial cables
+                // per turn, and that same number is what DelVecchio 12.12 computes the winding's capacitance from. So the dialog shows
+                // it and does not let it be edited - a declaration that disagreed with the capacitance would be worse than none.
+                initialLoops = max(1, await xlFile.windings[coil].turnDefinition.multistartLoops)
+            }
+            else if existing == nil, arrangement == .doubleStack {
 
-                    initialLoops = RegulatingWinding.DefaultLoops(discsPerStack: numDiscs / 2)
-                }
-                else if arrangement == .multiStart {
-
-                    // The design file knows this one: a multi-start winding's loops are its axial cables.
-                    initialLoops = max(1, await xlFile.windings[coil].turnDefinition.multistartLoops)
-                }
+                initialLoops = RegulatingWinding.DefaultLoops(discsPerStack: numDiscs / 2)
             }
 
             let dialog = RegulatingWindingDialog(coil: coil, arrangement: arrangement, numDiscs: numDiscs, initialLoops: initialLoops, isAlreadyDeclared: existing != nil)
