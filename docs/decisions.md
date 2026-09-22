@@ -112,6 +112,22 @@ DV 12.11 is implemented (`Segment.WoundInShieldSeriesCapacitance` / `.WoundInShi
 
 ---
 
+## §2c — a multi-start winding stays one lumped section (2026-09-22)
+
+Settled when regulating-winding declarations were added (`RegulatingWinding.swift`). A multi-start winding's loops are wound side by
+side, turn beside turn, each over the whole height of the winding, and the end of each loop is tied to the start of the next. The
+question was whether to model those ties as connections — which would mean splitting the winding into one sub-section per loop — or
+to keep the whole winding as the single `.multistart` BasicSection `AppController` already builds.
+
+**Lumped.** The loops occupy the *same* space, so they cannot be separate axially contiguous Segments, and splitting them would
+need new geometry and a new capacitance between sub-sections that interpenetrate. DelVecchio 12.12 is written for exactly the
+lumped case: the ties are implicit in its series capacitance, where each turn lies beside a turn one loop-voltage away. So a
+multi-start regulating winding has **no permanent connections to make** — its declaration only records the loop count for 12.12
+— and the double-stacked disc winding is the only arrangement for which a declaration puts jumpers on. 12.12 itself is still open
+(`TODO.md` §2).
+
+---
+
 ## §12 — creep sites were built and then removed (2026-08-06)
 
 The decision to make the stress screen strike-only is settled; what is still open is the geometry work needed to bring creep back,

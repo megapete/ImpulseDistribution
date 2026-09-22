@@ -36,6 +36,7 @@
                 <outlet property="modeIndicatorTextField" destination="zvY-4g-7mg" id="Wl9-uU-VYo"/>
                 <outlet property="rLocationTextField" destination="NTX-as-kOd" id="arL-Ge-79x"/>
                 <outlet property="radialShieldInsideMenuItem" destination="BEG-M4-Kp7" id="3uR-Go-Bnw"/>
+                <outlet property="regulatingWindingMenuItem" destination="RgW-Mi-100" id="RgW-Mi-102"/>
                 <outlet property="removeConnectionMenuItem" destination="VZ8-kL-Dja" id="in8-h8-Gl3"/>
                 <outlet property="removeRadialShieldMenuItem" destination="xXj-L6-RCw" id="PQm-pG-7IL"/>
                 <outlet property="removeStaticRingMenuItem" destination="4HP-v0-HBk" id="Y4d-TJ-nm9"/>
@@ -309,6 +310,13 @@
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
                                     <action selector="handleRemoveConnection:" target="XWq-sU-B2V" id="ok3-5u-Sgm"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="RgW-Sp-100"/>
+                            <menuItem title="Regulating Winding…" id="RgW-Mi-100">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="handleRegulatingWinding:" target="XWq-sU-B2V" id="RgW-Mi-101"/>
                                 </connections>
                             </menuItem>
                         </items>

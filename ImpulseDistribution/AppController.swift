@@ -113,6 +113,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
     @IBOutlet weak var addGroundMenuItem: NSMenuItem!
     @IBOutlet weak var addConnectionMenuItem: NSMenuItem!
     @IBOutlet weak var removeConnectionMenuItem: NSMenuItem!
+    @IBOutlet weak var regulatingWindingMenuItem: NSMenuItem!
     
     /// Save matrices
     @IBOutlet weak var saveMmatrixMenuItem: NSMenuItem!
@@ -426,6 +427,16 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
     
     /// The original xlFile used to create the current sections (originally, at least, the only way to create the Basic Sections is by importing an XL file.
     var currentXLfile:PCH_ExcelDesignFile? = nil
+
+    /// Where `currentXLfile` was read from, which is what the regulating-winding declarations are filed under. Nil when the model
+    /// was built without going through `doOpen` - a SelfTest run - so that a scripted run never picks up, or overwrites, what the
+    /// user declared on the same design.
+    var currentDesignFileURL:URL? = nil
+
+    /// The coils declared as regulating windings and in force on the current model. See RegulatingWinding.swift. Saved to
+    /// `RegulatingWindingStore` under `currentDesignFileURL` whenever it changes, and read back (and re-applied) when that design
+    /// is next opened.
+    var regulatingWindings:[RegulatingWinding] = []
     
     /// The theoretical depth of the tank (used for display and ground capacitance calculations)
     var tankDepth:Double = 0.0
@@ -572,7 +583,9 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
     /// - Parameter newSegments: An array of Segments to insert into the model. Must be contiguous and in order.
     /// - Parameter xFile: The ExcelDesignFile that was inputted. If this is non-nil and 'reinitialize' is set to true, the existing model is overwtitten using the contents of the file.
     /// - Parameter reinitialize: Boolean value set to true if the entire memory should be reinitialized. If xlFile is non-nil, the it is used to overwrite the exisitng model. Otherwise, the model is reinitialized using the BasicSections in the AppController's currentSections array.
-    func updateModel(oldSegments:[Segment], newSegments:[Segment], xlFile:PCH_ExcelDesignFile?, reinitialize:Bool) async {
+    /// - Parameter designFile: Where `xlFile` came from, when it came from the user opening it. The regulating windings declared on
+    /// that design are re-applied to the fresh model. Nil for every other caller, which leaves the model with no declarations at all.
+    func updateModel(oldSegments:[Segment], newSegments:[Segment], xlFile:PCH_ExcelDesignFile?, reinitialize:Bool, designFile:URL? = nil) async {
 
         // Ask any recalculation already in flight to stop BEFORE the store is touched, not after. recalculateModel() supersedes it
         // anyway at the bottom of this routine, but by then the segment swap below has already happened and the old run - which
@@ -602,7 +615,17 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             
             // initialize the model so that all the BasicSections are modeled
             self.currentModel = await self.initializeModel(basicSections: self.currentSections)
-            
+
+            // The permanent connections of any regulating winding declared on this design go on now, while every lead is still
+            // floating and every coil is still one disc per Segment - and before initializeViews, so they are drawn with the rest.
+            self.currentDesignFileURL = designFile
+            self.regulatingWindings = []
+
+            if let model = self.currentModel, let designFile {
+
+                await self.ApplySavedRegulatingWindings(RegulatingWindingStore.shared.windings(for: designFile), model: model)
+            }
+
             self.initializeViews()
         }
         else {
@@ -3228,7 +3251,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
             
             Task {
-                await self.updateModel(oldSegments: [], newSegments: [], xlFile: xlFile, reinitialize: true)
+                await self.updateModel(oldSegments: [], newSegments: [], xlFile: xlFile, reinitialize: true, designFile: fileURL)
             }
             
             self.mainWindow.title = fileURL.lastPathComponent
@@ -4254,7 +4277,180 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         
         self.txfoView.mode = .removeConnector
     }
-    
+
+    // MARK: Regulating windings
+
+    @IBAction func handleRegulatingWinding(_ sender: Any) {
+
+        guard let firstSelected = self.txfoView.currentSegments.first else {
+
+            return
+        }
+
+        self.doRegulatingWinding(coil: firstSelected.segment.radialPos)
+    }
+
+    /// Declare `coil` a regulating winding (or change or withdraw an existing declaration), and put on or take off the connections
+    /// that are a permanent part of it. See RegulatingWinding.swift.
+    ///
+    /// Like a jumper added by hand, this changes the connections and nothing else: no geometry moves, so there is nothing for
+    /// recalculateModel to do, and the simulation model is rebuilt from the connections on the next run anyway.
+    func doRegulatingWinding(coil:Int) {
+
+        guard let model = self.currentModel else {
+
+            return
+        }
+
+        Task {
+
+            guard let arrangement = await self.RegulatingWindingArrangement(coil: coil), let xlFile = self.currentXLfile else {
+
+                self.PCH_ErrorAlert(message: "Coil \(coil) is not in the design file.", info: "How a regulating winding is built - double-stacked, multi-start or a single stack - is read from the design file, so the model has to have been opened from one.")
+                return
+            }
+
+            let existing = self.regulatingWindings.first(where: { $0.coil == coil })
+
+            // The disc count as the model has it now, which is also the check that the winding can still be connected at all -
+            // a double-stacked coil that has been interleaved has no crossovers left to tie together.
+            let numDiscs:Int
+
+            do {
+
+                numDiscs = try await RegulatingWinding(coil: coil, numLoops: 1).CheckModel(model, arrangement: arrangement)
+            }
+            catch {
+
+                self.PCH_ErrorAlert(message: error.localizedDescription, info: (error as? RegulatingWinding.DeclarationError)?.info)
+                return
+            }
+
+            var initialLoops = existing?.numLoops ?? 1
+
+            if existing == nil {
+
+                if arrangement == .doubleStack {
+
+                    initialLoops = RegulatingWinding.DefaultLoops(discsPerStack: numDiscs / 2)
+                }
+                else if arrangement == .multiStart {
+
+                    // The design file knows this one: a multi-start winding's loops are its axial cables.
+                    initialLoops = max(1, await xlFile.windings[coil].turnDefinition.multistartLoops)
+                }
+            }
+
+            let dialog = RegulatingWindingDialog(coil: coil, arrangement: arrangement, numDiscs: numDiscs, initialLoops: initialLoops, isAlreadyDeclared: existing != nil)
+
+            guard let result = dialog.runModal() else {
+
+                return
+            }
+
+            switch result {
+
+            case .remove:
+
+                if let existing {
+
+                    await existing.Remove(from: model, arrangement: arrangement)
+                }
+
+                self.regulatingWindings.removeAll(where: { $0.coil == coil })
+
+            case .declare(let numLoops):
+
+                let declared = RegulatingWinding(coil: coil, numLoops: numLoops)
+
+                // A changed loop count moves the tap points, so the old ties have to come off before the new ones go on - otherwise
+                // both sets would be on the winding at once, which is a transformer nobody built.
+                if let existing, existing != declared {
+
+                    await existing.Remove(from: model, arrangement: arrangement)
+                }
+
+                do {
+
+                    let outcome = try await declared.Apply(to: model, arrangement: arrangement)
+                    DLog("Regulating winding, coil \(coil): \(outcome.made) jumper(s) made, \(outcome.alreadyThere) already there\n" + outcome.log.joined(separator: "\n"))
+                }
+                catch {
+
+                    // Put the old declaration's connections back, so that a failed change leaves the winding as it was.
+                    if let existing, existing != declared {
+
+                        _ = try? await existing.Apply(to: model, arrangement: arrangement)
+                    }
+
+                    self.PCH_ErrorAlert(message: error.localizedDescription, info: (error as? RegulatingWinding.DeclarationError)?.info)
+                    self.txfoView.RebuildConnectors()
+                    return
+                }
+
+                self.regulatingWindings.removeAll(where: { $0.coil == coil })
+                self.regulatingWindings.append(declared)
+            }
+
+            if let designFile = self.currentDesignFileURL {
+
+                RegulatingWindingStore.shared.save(self.regulatingWindings, for: designFile)
+            }
+
+            self.txfoView.RebuildConnectors()
+            self.txfoView.needsDisplay = true
+        }
+    }
+
+    /// How `coil` is built, according to the design file. Nil if there is no design file or no such coil in it.
+    func RegulatingWindingArrangement(coil:Int) async -> RegulatingWinding.Arrangement? {
+
+        guard let xlFile = self.currentXLfile else {
+
+            return nil
+        }
+
+        // A coil's radial position IS its index in the design file's windings - createBasicSections numbers them that way.
+        let windings = await xlFile.windings
+
+        guard coil >= 0, coil < windings.count else {
+
+            return nil
+        }
+
+        return RegulatingWinding.Arrangement.Of(windings[coil])
+    }
+
+    /// Re-apply the declarations saved with a design to the model just built from it, and put the ones that took into
+    /// `regulatingWindings`.
+    ///
+    /// A declaration that no longer fits the design - its coil is gone, or the stack no longer divides into its loops - is
+    /// reported and left out of what is in force. It is NOT deleted from the store here; that happens only if the user then
+    /// declares something on this design, which saves what is in force. Opening a design is not an edit.
+    func ApplySavedRegulatingWindings(_ saved:[RegulatingWinding], model:PhaseModel) async {
+
+        for nextWinding in saved {
+
+            guard let arrangement = await self.RegulatingWindingArrangement(coil: nextWinding.coil) else {
+
+                self.PCH_ErrorAlert(message: "The regulating winding declared on coil \(nextWinding.coil) was not applied.", info: "The design no longer has a coil \(nextWinding.coil).")
+                continue
+            }
+
+            do {
+
+                let outcome = try await nextWinding.Apply(to: model, arrangement: arrangement)
+                DLog("Regulating winding, coil \(nextWinding.coil): \(outcome.made) jumper(s) made on load")
+
+                self.regulatingWindings.append(nextWinding)
+            }
+            catch {
+
+                self.PCH_ErrorAlert(message: "The regulating winding declared on coil \(nextWinding.coil) was not applied.", info: "\(error.localizedDescription) \((error as? RegulatingWinding.DeclarationError)?.info ?? "")")
+            }
+        }
+    }
+
     // next two functions for adding a static ring over the selection
     @IBAction func handleAddStaticRingOver(_ sender: Any) {
         
@@ -5026,6 +5222,14 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             // contiguous (only relevant on the rebuild path, since pairing across a gap would straddle two discs that are not
             // neighbours), and whether a disc has the 2 turns a shield turn needs to sit between.
             return currentSegsCount % 2 == 0 || !currentSegs.contains(where: { $0.segment.basicSections.count % 2 != 0 })
+        }
+
+        if menuItem == self.regulatingWindingMenuItem {
+
+            // The arrangement comes from the design file, so there has to be one. Whether the coil is still one disc per Segment
+            // is NOT tested here - basicSections is readable, but the answer is only needed for a double-stacked winding, which
+            // is a design-file question validateMenuItem cannot await - so doRegulatingWinding reports it instead.
+            return self.currentModel != nil && self.currentXLfile != nil && currentSegsCount > 0 && !self.txfoView.currentSegmentsContainMoreThanOneWinding && !currentSegs.contains(where: { $0.segment.isStaticRing || $0.segment.isRadialShield })
         }
 
         if menuItem == self.showWdgAsSingleSegmentMenuItem {

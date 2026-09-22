@@ -29,10 +29,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         //     defaults read com.huberistech.ImpulseDistribution TurnLadderVerification
         //     defaults read com.huberistech.ImpulseDistribution DielectricStressVerification
         //     defaults read com.huberistech.ImpulseDistribution SheetCapacitanceVerification
+        //     defaults read com.huberistech.ImpulseDistribution RegulatingWindingVerification
         if UserDefaults.standard.bool(forKey: "PCH_Verify") {
 
             TurnLadderModel.VerifySelf()
             DielectricStress.VerifySelf()
+            RegulatingWinding.VerifySelf()
 
             // This one builds Segments, so it is async and the terminate has to wait for it rather than race it.
             Task {

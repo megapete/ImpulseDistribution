@@ -36,6 +36,10 @@ fail.
   argument that 12.48 applies to plain discs — see the comment in `BasicSectionSeriesCapacitance`.
 - **Multi-start (DV 12.12)** — unimplemented. A `.multistart` BasicSection type exists and is produced by
   `AppController` from the design file, but `CapacitanceTurnToTurn` throws `.UnimplementedWdgType` for it.
+  **Settled 2026-09-22: it stays one lumped section** (`docs/decisions.md` §2c), so 12.12 is the whole of
+  what is left. The loop count it needs is already known: it is the `numLoops` of a regulating-winding
+  declaration (`RegulatingWinding.swift`), and the design file's own `turnDefinition.multistartLoops`
+  is what the declaration dialog opens on.
 
 #### 2b. Cross-check against Kulkarni & Khaparde §7.3 — **closed 2026-08-06**
 

@@ -48,6 +48,9 @@
 		F5A15CE32C0A130000000002 /* StressProfileWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A15CE32C0A130000000001 /* StressProfileWindow.swift */; };
 		F5A15CE32C0A130000000012 /* InitialDistributionWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A15CE32C0A130000000011 /* InitialDistributionWindow.swift */; };
 		F5A15CE32C0A130000000022 /* SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A15CE32C0A130000000021 /* SelfTest.swift */; };
+		A7E1C0012F6A00A100000006 /* RegulatingWindingDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1C0012F6A00A100000005 /* RegulatingWindingDialog.swift */; };
+		A7E1C0012F6A00A100000004 /* RegulatingWinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1C0012F6A00A100000003 /* RegulatingWinding.swift */; };
+		A7E1C0012F6A00A100000002 /* Wiring.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1C0012F6A00A100000001 /* Wiring.swift */; };
 		F5A15CE32C0A130000000032 /* AxialStressProfileWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A15CE32C0A130000000031 /* AxialStressProfileWindow.swift */; };
 		F5A15CE32C0A130000000042 /* StressProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A15CE32C0A130000000041 /* StressProfileView.swift */; };
 		F5A15CE32C0A130000000052 /* RadialProfileWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A15CE32C0A130000000051 /* RadialProfileWindow.swift */; };
@@ -97,6 +100,9 @@
 		F5A15CE32C0A130000000001 /* StressProfileWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressProfileWindow.swift; sourceTree = "<group>"; };
 		F5A15CE32C0A130000000011 /* InitialDistributionWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InitialDistributionWindow.swift; sourceTree = "<group>"; };
 		F5A15CE32C0A130000000021 /* SelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfTest.swift; sourceTree = "<group>"; };
+		A7E1C0012F6A00A100000005 /* RegulatingWindingDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegulatingWindingDialog.swift; sourceTree = "<group>"; };
+		A7E1C0012F6A00A100000003 /* RegulatingWinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegulatingWinding.swift; sourceTree = "<group>"; };
+		A7E1C0012F6A00A100000001 /* Wiring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wiring.swift; sourceTree = "<group>"; };
 		F5A15CE32C0A130000000031 /* AxialStressProfileWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AxialStressProfileWindow.swift; sourceTree = "<group>"; };
 		F5A15CE32C0A130000000041 /* StressProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressProfileView.swift; sourceTree = "<group>"; };
 		F5A15CE32C0A130000000051 /* RadialProfileWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadialProfileWindow.swift; sourceTree = "<group>"; };
@@ -173,6 +179,9 @@
 				F5A15CE32C0A130000000001 /* StressProfileWindow.swift */,
 				F5A15CE32C0A130000000011 /* InitialDistributionWindow.swift */,
 				F5A15CE32C0A130000000021 /* SelfTest.swift */,
+				A7E1C0012F6A00A100000005 /* RegulatingWindingDialog.swift */,
+				A7E1C0012F6A00A100000003 /* RegulatingWinding.swift */,
+				A7E1C0012F6A00A100000001 /* Wiring.swift */,
 				F5AA15FE2C0A140000000011 /* FePhase.swift */,
 				F5A15CE32C0A130000000031 /* AxialStressProfileWindow.swift */,
 				F5A15CE32C0A130000000051 /* RadialProfileWindow.swift */,
@@ -313,6 +322,9 @@
 				F5A15CE32C0A130000000002 /* StressProfileWindow.swift in Sources */,
 				F5A15CE32C0A130000000012 /* InitialDistributionWindow.swift in Sources */,
 				F5A15CE32C0A130000000022 /* SelfTest.swift in Sources */,
+				A7E1C0012F6A00A100000006 /* RegulatingWindingDialog.swift in Sources */,
+				A7E1C0012F6A00A100000004 /* RegulatingWinding.swift in Sources */,
+				A7E1C0012F6A00A100000002 /* Wiring.swift in Sources */,
 				F5AA15FE2C0A140000000012 /* FePhase.swift in Sources */,
 				F5A15CE32C0A130000000032 /* AxialStressProfileWindow.swift in Sources */,
 				F5A15CE32C0A130000000052 /* RadialProfileWindow.swift in Sources */,
@@ -498,7 +510,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 306156F3;
+				CURRENT_PROJECT_VERSION = 3062B31C;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -511,7 +523,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.huberistech.ImpulseDistribution;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -531,7 +543,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 306156F3;
+				CURRENT_PROJECT_VERSION = 3062B31C;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -544,7 +556,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.huberistech.ImpulseDistribution;
 				PRODUCT_NAME = "$(TARGET_NAME)";

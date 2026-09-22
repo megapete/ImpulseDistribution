@@ -106,37 +106,13 @@ enum SelfTest {
 
     // MARK: Scenario description
 
-    /// Which end of a coil a lead comes off.
-    enum CoilEnd {
+    /// Which end of a coil a lead comes off. Lives in `Wiring` now, which the regulating-winding path shares.
+    typealias CoilEnd = Wiring.CoilEnd
 
-        case bottom
-        case top
-    }
-
-    /// A point on the winding that a lead comes off - the thing the user would click on in `TransformerView`.
-    ///
-    /// A scenario names its connections this way rather than by (Segment, Connector.Location) because neither of those is knowable
-    /// from the design file: which Segment is at the bottom of a coil depends on how many there are, and whether its lead is at
-    /// `.inside_lower`, `.outside_lower` or `.center_lower` depends on the winding type and the disc count (see AppController's
-    /// segment-building loop). Guessing either gives a connector `NodeAt` cannot resolve, which is exactly the failure this file
-    /// exists to catch, so the lead is always *found* and never computed.
-    enum LeadPoint {
-
-        /// The lead at the bottom or top of a whole coil.
-        case coilEnd(coil:Int, end:CoilEnd)
-        /// A lead at one side of a coil's internal tapping/DV gap. `gap` counts gaps from the bottom of the coil, and `side` says
-        /// which of the two leads facing across it is wanted - `.bottom` for the one on the Segment below the gap.
-        case gapLead(coil:Int, gap:Int, side:CoilEnd)
-        /// The crossover between two axially adjacent discs of a coil, named by the disc BELOW it, counting from 1 at the bottom
-        /// of the coil. This is an interior point of the winding rather than a lead going anywhere - the series connector
-        /// AppController's segment-building loop puts between every pair of discs - and it is a real place to jumper from: it is
-        /// drawn, it is hit-testable, and paralleling the two halves of a double-stacked tap winding is done by tying pairs of
-        /// them together.
-        ///
-        /// Whether a given crossover is at the OD or the ID is not a choice; it alternates disc by disc, so a scenario says which
-        /// disc it means and the run reports which side that turned out to be.
-        case discCrossover(coil:Int, disc:Int)
-    }
+    /// A point on the winding that a lead comes off. A scenario names its connections this way rather than by
+    /// (Segment, Connector.Location), for the reasons given on `Wiring.LeadPoint`: the lead is always *found* and never computed,
+    /// because a guessed one produces a connector `NodeAt` cannot resolve, which is exactly the failure this file exists to catch.
+    typealias LeadPoint = Wiring.LeadPoint
 
     /// One terminal of the test connection: a lead, and what it is tied to.
     struct Termination {
@@ -146,17 +122,13 @@ enum SelfTest {
         let type:Connector.Location
     }
 
-    /// A jumper between two leads - what the user makes by dragging from one connector to another.
+    /// A jumper between two leads - what the user makes by clicking one connector and then another.
     ///
     /// Applied AFTER the restructure and BEFORE the terminations, in the order the scenario lists them, because both of those
     /// orderings are load-bearing. A restructure swaps Segments and sends `UpdateConnectors` through the connectors, which a
     /// jumper made first would not survive; and `AddConnector` REPLACES a floating lead with a ground or an impulse while it
     /// APPENDS a jumper, so a lead that has already been terminated is no longer there to jumper from.
-    struct Jumper {
-
-        let from:LeadPoint
-        let to:LeadPoint
-    }
+    typealias Jumper = Wiring.Jumper
 
     /// One edit made to an already-wired model, applied in order after the scenario's own jumpers and terminations.
     ///
@@ -259,6 +231,10 @@ enum SelfTest {
         let notes:String
         /// Segment-to-segment jumpers, applied in order, after the restructure and before the terminations.
         let jumpers:[Jumper]
+        /// Coils declared as regulating windings, whose permanent connections go on through `RegulatingWinding.Apply` - the path
+        /// the menu command and the design-file load take - BEFORE `jumpers`, since a jumper that ties the winding to anything
+        /// else is made to a winding that is already connected up. Empty for a scenario that wires everything by hand.
+        var regulatingWindings:[RegulatingWinding] = []
         let terminations:[Termination]
         /// Further edits, in order, made to the model once the jumpers and terminations above are all on. Empty for a scenario
         /// that describes a wiring built in one pass.
@@ -412,7 +388,11 @@ enum SelfTest {
 
         // The same again with the tie to the HV neutral moved from the tap winding's outer ends to its CENTRE. Same winding, same
         // paralleling, same impulse - the only difference is which part of coil 3 is held at earth and which part is free.
-        "T0223-tap-parallel-centre" : T0223TapParallel(name: "T0223-tap-parallel-centre", neutralTie: .centre)
+        "T0223-tap-parallel-centre" : T0223TapParallel(name: "T0223-tap-parallel-centre", neutralTie: .centre),
+
+        // T0223-tap-parallel again, with coil 3's nine paralleling jumpers made by DECLARING it a regulating winding rather than
+        // by listing them. Must print the same Connectivity line as T0223-tap-parallel. See RegulatingWinding.swift.
+        "T0223-tap-declared" : T0223TapParallel(name: "T0223-tap-declared", neutralTie: .outerEnds, declared: true)
     ]
 
     /// The T0223 fixture: four coils, of which coil 1 is a 17-turn SHEET winding with two 0.25" cooling ducts in it and 0.010"
@@ -485,7 +465,11 @@ enum SelfTest {
     /// model solves a boundary-value problem whose far boundary is V = 0; `ContinuumComparison` declines the comparison out loud
     /// when that boundary is not there, as it is not on S0738, where the HV's return runs through both halves of the tap winding
     /// to a centre ground and the far end floats at 0.65 p.u. instead.
-    private static func T0223TapParallel(name:String, neutralTie:TapNeutralTie) -> Scenario {
+    ///
+    /// `declared` wires the same thing a second way: coil 3 is DECLARED a double-stacked regulating winding of 8 loops and the nine
+    /// connections come from `RegulatingWinding.Apply`, leaving only the tie to the HV neutral as a hand jumper. The declaration was
+    /// written to produce exactly the wiring this scenario spells out, so the two runs must print an identical `Connectivity:` line.
+    private static func T0223TapParallel(name:String, neutralTie:TapNeutralTie, declared:Bool = false) -> Scenario {
 
         // Coil 3 is 32 discs with its tapping gap between discs 16 and 17. Disc d pairs with disc 32-d, its mirror image about
         // the gap; `discCrossover` names a crossover by the disc BELOW it, counting from 1 at the bottom of the coil, so the
@@ -521,12 +505,21 @@ enum SelfTest {
             jumpers.append(Jumper(from: .gapLead(coil: 3, gap: 0, side: .bottom), to: .coilEnd(coil: 2, end: .bottom)))
         }
 
+        // The declared variant keeps only the last jumper - the neutral tie - and lets the declaration make the other nine.
+        let regulatingWindings = declared ? [RegulatingWinding(coil: 3, numLoops: 8)] : []
+
+        if declared {
+
+            jumpers = [jumpers.last!]
+        }
+
         return Scenario(name: name,
                         restructure: .none,
                         matchedBuild: nil,
                         fixtureName: "T0223_AndIn.txt",
                         notes: "Four coils: coil 0 (147 turns, 44 discs), coil 1 a 17-turn sheet winding, coil 2 the impulsed HV (336 turns, 44 discs), coil 3 a double-stacked 71-turn tap winding (32 discs) with its two halves paralleled in 2-disc steps and its \(neutralTie == .outerEnds ? "outer ends" : "centre") tied to the HV neutral. Coils 0 and 1 grounded at both ends; 125 kV full wave on coil 2's top, coil 2's bottom grounded.",
                         jumpers: jumpers,
+                        regulatingWindings: regulatingWindings,
                         terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
                                        Termination(point: .coilEnd(coil: 0, end: .top), type: .ground),
                                        Termination(point: .coilEnd(coil: 1, end: .bottom), type: .ground),
@@ -988,6 +981,65 @@ enum SelfTest {
 
         // The jumpers go on after the restructure (which would sweep them away with UpdateConnectors) and before the
         // terminations (which replace the floating lead a jumper needs in order to find its end). See `Jumper`.
+        if !scenario.regulatingWindings.isEmpty {
+
+            Stage("applying the regulating-winding declarations")
+
+            text += "REGULATING WINDINGS\n"
+            text += String(repeating: "-", count: 110) + "\n"
+
+            for nextWinding in scenario.regulatingWindings {
+
+                guard let arrangement = await controller.RegulatingWindingArrangement(coil: nextWinding.coil) else {
+
+                    return Report(text: text + "FAILED: coil \(nextWinding.coil) is not in the design file\n", summary: "FAILED - regulating winding on a coil the design does not have")
+                }
+
+                do {
+
+                    let outcome = try await nextWinding.Apply(to: model, arrangement: arrangement)
+
+                    text += "  Coil \(nextWinding.coil): \(arrangement.description), \(nextWinding.numLoops) loop(s) - \(outcome.made) jumper(s) made\n"
+                    text += outcome.log.map({ "    \($0)\n" }).joined()
+
+                    // Applying a declaration a second time must change nothing: every jumper is already there.
+                    let again = try await nextWinding.Apply(to: model, arrangement: arrangement)
+
+                    guard again.made == 0, again.alreadyThere == outcome.made + outcome.alreadyThere else {
+
+                        return Report(text: text + "FAILED: applying coil \(nextWinding.coil)'s declaration again made \(again.made) more jumper(s)\n", summary: "FAILED - regulating winding applied twice is not idempotent")
+                    }
+
+                    text += "  Applied again: \(again.alreadyThere) already connected, none made - idempotent\n"
+
+                    // What the menu does when the loop count is changed: take the old ties off, put the new ones on. Round-trip
+                    // through a different count and back, so the scenario ends on the declared wiring - and since that has to
+                    // print the same Connectivity line as the hand-wired scenario, anything a removal left behind shows up there.
+                    let total = outcome.made + outcome.alreadyThere
+                    let other = RegulatingWinding(coil: nextWinding.coil, numLoops: nextWinding.numLoops == 1 ? 2 : 1)
+
+                    let removed = await nextWinding.Remove(from: model, arrangement: arrangement)
+                    let otherOutcome = try await other.Apply(to: model, arrangement: arrangement)
+                    let otherRemoved = await other.Remove(from: model, arrangement: arrangement)
+                    let restored = try await nextWinding.Apply(to: model, arrangement: arrangement)
+
+                    guard removed == total, otherRemoved == otherOutcome.made, restored.made == total else {
+
+                        return Report(text: text + "FAILED: changing coil \(nextWinding.coil)'s loop count: removed \(removed) of \(total), made \(otherOutcome.made) and removed \(otherRemoved) for \(other.numLoops) loop(s), restored \(restored.made) of \(total)\n", summary: "FAILED - changing a regulating winding's loop count")
+                    }
+
+                    text += "  Changed to \(other.numLoops) loop(s) and back: \(removed) removed, \(otherOutcome.made) made and removed, \(restored.made) restored\n"
+                }
+                catch {
+
+                    let info = (error as? RegulatingWinding.DeclarationError)?.info ?? ""
+                    return Report(text: text + "FAILED: coil \(nextWinding.coil): \(error.localizedDescription) \(info)\n", summary: "FAILED - " + error.localizedDescription)
+                }
+            }
+
+            text += "\n"
+        }
+
         if !scenario.jumpers.isEmpty {
 
             Stage("applying the jumpers")
@@ -1728,237 +1780,36 @@ enum SelfTest {
 
     // MARK: Finding a lead
 
-    /// The outcome of looking for the lead a `LeadPoint` names.
-    private enum LeadLookup {
-
-        case ok(segment:Segment, location:Connector.Location)
-        case failed(String)
-    }
-
     private static func Describe(_ point:LeadPoint) -> String {
 
-        switch point {
-
-        case .coilEnd(let coil, let end):
-
-            return "coil \(coil) \(end == .bottom ? "bottom" : "top")"
-
-        case .gapLead(let coil, let gap, let side):
-
-            return "coil \(coil) gap \(gap) \(side == .bottom ? "lower" : "upper") lead"
-
-        case .discCrossover(let coil, let disc):
-
-            return "coil \(coil) crossover \(disc)-\(disc + 1)"
-        }
+        return Wiring.Describe(point)
     }
 
-    /// Find the (Segment, location) a `LeadPoint` names, by looking at what the model actually has.
-    ///
-    /// Nothing here is computed from the design: a coil-end lead is whichever floating termination sits at the outward end of the
-    /// coil's outermost Segment, and a gap lead is whichever centre-location connection sits on a Segment facing across a break.
-    /// See `LeadPoint` for why that matters.
-    private static func FindLead(_ point:LeadPoint, model:PhaseModel) async -> LeadLookup {
+    /// Find the (Segment, location) a `LeadPoint` names. See `Wiring.FindLead`; the harness always wants a coil-end lead to be
+    /// still floating, which is what the default gives.
+    private static func FindLead(_ point:LeadPoint, model:PhaseModel) async -> Wiring.LeadLookup {
 
-        switch point {
-
-        case .coilEnd(let coil, let end):
-
-            let coilSegments = await model.CoilSegments().filter({ $0.radialPos == coil })
-
-            guard let segment = end == .bottom ? coilSegments.first : coilSegments.last else {
-
-                return .failed("coil \(coil) has no segments")
-            }
-
-            let wantLower = end == .bottom
-
-            // A coil-end lead is a termination on the Segment itself (segmentID nil) that is still floating, at a lower
-            // location for the bottom of the coil and an upper one for the top.
-            guard let lead = await segment.connections.first(where: {
-
-                $0.segmentID == nil
-                    && $0.connector.toLocation == .floating
-                    && (wantLower ? $0.connector.fromIsLower : $0.connector.fromIsUpper)
-
-            }) else {
-
-                return .failed("no floating lead at that end of segment \(segment.serialNumber)")
-            }
-
-            return .ok(segment: segment, location: lead.connector.fromLocation)
-
-        case .gapLead(let coil, let gap, let side):
-
-            let coilSegments = await model.CoilSegments().filter({ $0.radialPos == coil })
-
-            // A centre location is created in exactly one place - AppController's segment-building loop, at a tapping/DV gap - so
-            // a Segment carrying one is a Segment facing across a gap, and two consecutive such Segments ARE a gap. The test is
-            // on the location and not on the lead still being floating, because by the time a scenario grounds the second of two
-            // jumpered centre leads the first one is no longer floating.
-            var gaps:[(below:Segment, above:Segment)] = []
-
-            for i in 0..<max(coilSegments.count - 1, 0) {
-
-                let below = coilSegments[i]
-                let above = coilSegments[i + 1]
-
-                let belowHasCentre = await below.connections.contains(where: { $0.connector.fromIsCenter })
-                let aboveHasCentre = await above.connections.contains(where: { $0.connector.fromIsCenter })
-
-                if belowHasCentre && aboveHasCentre {
-
-                    gaps.append((below: below, above: above))
-                }
-            }
-
-            guard gap >= 0, gap < gaps.count else {
-
-                return .failed("coil \(coil) has \(gaps.count) internal gap(s), so gap \(gap) does not exist")
-            }
-
-            let segment = side == .bottom ? gaps[gap].below : gaps[gap].above
-            let locations = Set(await segment.connections.filter({ $0.connector.fromIsCenter }).map({ $0.connector.fromLocation }))
-
-            // A Segment between two gaps would carry two centre leads with nothing in the location to say which gap each faces.
-            // The disc arithmetic in AppController makes that impossible (the lower and upper tapping gaps are a quarter of the
-            // coil apart), so this is a guard against a future geometry rather than a case to handle.
-            guard locations.count == 1, let location = locations.first else {
-
-                return .failed("segment \(segment.serialNumber) carries \(locations.count) centre leads, so which one faces gap \(gap) is ambiguous")
-            }
-
-            return .ok(segment: segment, location: location)
-
-        case .discCrossover(let coil, let disc):
-
-            let coilSegments = await model.CoilSegments().filter({ $0.radialPos == coil })
-
-            // Disc numbering only means anything while every Segment of the coil holds exactly one BasicSection, which is what
-            // the load path gives and what a combine or an interleave destroys. Refuse rather than guess: a crossover inside a
-            // folded Segment is not a node at all, so there is nothing there to jumper to.
-            for nextSegment in coilSegments {
-
-                guard nextSegment.basicSections.count == 1 else {
-
-                    return .failed("coil \(coil) has been restructured (segment \(nextSegment.serialNumber) holds \(nextSegment.basicSections.count) discs), so disc numbering is not meaningful")
-                }
-            }
-
-            guard disc >= 1, disc < coilSegments.count else {
-
-                return .failed("coil \(coil) has \(coilSegments.count) discs, so there is no crossover above disc \(disc)")
-            }
-
-            let segment = coilSegments[disc - 1]
-
-            // The outgoing series connector - the one that goes UP out of this disc into the next. There is exactly one, and its
-            // location is whichever of outside/inside the alternation landed on. Taking it from the model rather than computing
-            // it is the same discipline the two cases above follow.
-            guard let crossover = await segment.connections.first(where: { $0.segmentID != nil && $0.connector.fromIsUpper }) else {
-
-                return .failed("disc \(disc) of coil \(coil) (segment \(segment.serialNumber)) has no outgoing series connector, so the crossover above it is a break and not a crossover")
-            }
-
-            return .ok(segment: segment, location: crossover.connector.fromLocation)
-        }
+        return await Wiring.FindLead(point, model: model)
     }
 
     // MARK: Jumpers
 
-    /// Put a jumper between two leads, the way `TransformerView.CompleteAddConnection` does.
-    ///
-    /// This is a port of that routine's body with the hit testing and the redraw taken out, and the cross-product is the part
-    /// worth keeping: a lead that already carries jumpers is at the same potential as everything on the far end of them, so a new
-    /// jumper is registered on EVERY (Segment, location) pair at each of its two ends, with each copy carrying the others in its
-    /// `equivalentConnections`. Doing less than that here would build a model the UI cannot produce, and the redundant copies are
-    /// exactly what `PhaseModel.UpdateConnectors` and `SegmentPath.SetUpConnectors` are written to cope with.
+    /// Put a jumper between two leads, the way `TransformerView.CompleteAddConnection` does - see `Wiring.ApplyJumper`, which is
+    /// where the port of that routine now lives - and describe what happened in the report's words.
     private static func ApplyJumper(_ jumper:Jumper, model:PhaseModel) async -> String {
 
         let label = "\(Describe(jumper.from)) <-> \(Describe(jumper.to))"
 
-        let fromLookup = await FindLead(jumper.from, model: model)
+        switch await Wiring.ApplyJumper(jumper, model: model) {
 
-        guard case .ok(let fromSegment, let fromLocation) = fromLookup else {
+        case .made(let count, let fromSegment, let fromLocation, let toSegment, let toLocation):
 
-            if case .failed(let why) = fromLookup {
+            return "\(label): \(count) connector(s) from segment \(fromSegment) (\(fromLocation)) to segment \(toSegment) (\(toLocation))"
 
-                return "FAILED: \(label): \(Describe(jumper.from)): \(why)"
-            }
+        case .failed(let why):
 
-            return "FAILED: \(label): could not find \(Describe(jumper.from))"
+            return "FAILED: \(label): \(why)"
         }
-
-        let toLookup = await FindLead(jumper.to, model: model)
-
-        guard case .ok(let toSegment, let toLocation) = toLookup else {
-
-            if case .failed(let why) = toLookup {
-
-                return "FAILED: \(label): \(Describe(jumper.to)): \(why)"
-            }
-
-            return "FAILED: \(label): could not find \(Describe(jumper.to))"
-        }
-
-        let allSegments = await model.segments
-
-        // Both ends carry along everything already jumpered to them. The floating terminations are dropped (segmentID nil) - they
-        // are not a place to jumper TO - and the lead itself goes in at the head of its own list.
-        var startConnections = await fromSegment.ConnectionDestinations(fromLocation: fromLocation)
-        startConnections.removeAll(where: { $0.segmentID == nil })
-        startConnections.insert((fromSegment.serialNumber, fromLocation), at: 0)
-
-        var endConnections = await toSegment.ConnectionDestinations(fromLocation: toLocation)
-        endConnections.removeAll(where: { $0.segmentID == nil })
-        endConnections.insert((toSegment.serialNumber, toLocation), at: 0)
-
-        var equivalentConnections:Set<Segment.Connection.EquivalentConnection> = []
-        var madeCount = 0
-
-        for nextStartConnection in startConnections {
-
-            for nextEndConnection in endConnections {
-
-                guard let nextStartSegment = allSegments.first(where: { $0.serialNumber == nextStartConnection.segmentID }) else {
-
-                    return "FAILED: \(label): segment \(nextStartConnection.segmentID.map({ String($0) }) ?? "nil") is not in the model"
-                }
-
-                let newConnections = await nextStartSegment.AddConnector(segments: allSegments,
-                                                                         fromLocation: nextStartConnection.location,
-                                                                         toLocation: nextEndConnection.location,
-                                                                         toSegmentID: nextEndConnection.segmentID)
-
-                // AddConnector returns (nil, nil) for one reason only: it was asked to connect a Segment to itself, which happens
-                // here whenever the two ends of the cross-product land on the same Segment. That pair is simply not a jumper.
-                guard let newSrcConnection = newConnections.from, let newDestConnection = newConnections.to else {
-
-                    continue
-                }
-
-                equivalentConnections.insert(Segment.Connection.EquivalentConnection(parent: nextStartConnection.segmentID!, connection: newSrcConnection))
-                equivalentConnections.insert(Segment.Connection.EquivalentConnection(parent: nextEndConnection.segmentID!, connection: newDestConnection))
-                madeCount += 1
-            }
-        }
-
-        for nextConnection in equivalentConnections {
-
-            guard let nextConnParent = allSegments.first(where: { $0.serialNumber == nextConnection.parent }) else {
-
-                return "FAILED: \(label): equivalent-connection parent \(nextConnection.parent) is not in the model"
-            }
-
-            await nextConnParent.AddEquivalentConnections(to: nextConnection.connection, equ: equivalentConnections)
-        }
-
-        guard madeCount > 0 else {
-
-            return "FAILED: \(label): no connector was made - both ends resolved to the same Segment"
-        }
-
-        return "\(label): \(madeCount) connector(s) from segment \(fromSegment.serialNumber) (\(fromLocation)) to segment \(toSegment.serialNumber) (\(toLocation))"
     }
 
     /// The outcome of looking for the Segment a `LeadPoint` sits on, without asking what is on the lead.

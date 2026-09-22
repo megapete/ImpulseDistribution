@@ -136,6 +136,11 @@ read-only fields (insulation, stress, shield radial, build increase, C_s multipl
 count, and keeping that right in hand-maintained auto-layout is not worth it. It clamps `n` to `floor(N) − 1` and opens on
 `round(0.15·N)`.
 
+**`RegulatingWindingDialog`** (*Connections → Regulating Winding…*) is built the same way, for the same reason: its readout — discs
+per loop and the crossovers that will be tied — moves with the loop stepper, and a loop count that does not divide the stack
+disables the Declare button on the spot and lists the counts that would work. The declaration itself and what it connects are in
+`docs/connectors-and-nodes.md`.
+
 **`StressReportWindow` sizes itself from its columns, and nothing else may have a say.** It opens exactly as wide as the columns
 that are displayed (their widths live on `Column.width`, plus the table's intercell spacing and room for the scroller), or as wide
 as the screen's `visibleFrame` if that is narrower — so turning the corner columns off makes the window narrower by those two

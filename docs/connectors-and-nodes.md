@@ -90,3 +90,39 @@ and not for a path. A-B, B-C came out as the two *overlapping* groups `A:{B,C}` 
 then folds merges in dictionary order, and an order exists in which a node's charge equation is added to a row already replaced
 by a constraint — the group's charge balance is silently wrong. Proper components make each node an `eliminated` exactly once and
 never make a `kept` node an `eliminated`, which is the invariant assembly relies on and which `Snapshot()` still asserts.
+
+## Regulating windings: permanent connections made from a declaration (2026-09-22)
+
+*Connections → Regulating Winding…* declares the selected coil a regulating (tapping) winding and puts on the connections that are
+a permanent part of it (`RegulatingWinding.swift`, dialog in `RegulatingWindingDialog.swift`). The user gives only the number of
+**loops**; the **arrangement** — double-stacked, multi-start or single stack — is read from the design file every time and never
+stored. Only a double-stacked disc winding gets jumpers: with N discs and L loops per stack, d = N/(2L) discs per loop, the two outer
+ends are tied together, the crossover above disc k·d is tied to the one above disc N − k·d for k = 1…L−1, and the two centre leads
+are tied together — L + 1 jumpers. A stack that does not divide evenly into loops is refused, not rounded. A multi-start winding is
+one lumped section with nothing to connect (`docs/decisions.md` §2c); a single stack brings every tap lead out.
+
+The declaration is saved per design file in `RegulatingWindingStore` (a port of PchMagneticFlux's `TapDefinitionsStore`: one JSON
+file in the sandbox's Application Support, keyed by the design's path) and **re-applied when that design is next opened** — in
+`updateModel`, right after `initializeModel` and before `initializeViews`, while every lead is floating and every coil is one disc
+per Segment. Only `doOpen` passes the design URL, so a SelfTest run never reads or writes the user's declarations.
+
+Things that are deliberate:
+
+- **Every point is a `Wiring.LeadPoint`, found and never computed** — the machinery `SelfTest` used for its scenarios, moved into
+  `Wiring.swift` so the app could share it (`SelfTest.LeadPoint`/`Jumper`/`CoilEnd` are typealiases of it now). The centre gap is
+  found by `Wiring.InternalGaps`, the same centre-location predicate as `IsTappingGap`, and `CheckModel` refuses a coil that is not
+  one disc per Segment or that does not have exactly one gap in the middle (a double-stacked winding *with* off-load taps is cut at
+  the quarter points instead).
+- **Only jumpers are written, never terminations** (standing rule 6). Coil-end leads are found with `acceptTerminated: true`, so a
+  winding whose end was grounded first still gets its ties, beside the ground rather than in place of it.
+- **Applying is all-or-nothing on lookup and idempotent on the jumpers**: every lead is found before any jumper goes on, and a jumper
+  already there (`Wiring.IsApplied`: a *direct* connection between the two leads) is skipped, so applying twice is applying once.
+- **Changing the loop count takes the old ties off first** (`Remove` → `Wiring.RemoveJumper`), or both sets would be on the winding at
+  once. `RemoveJumper` matches the connection on both Segments **and** both locations: at one disc per loop, adjacent tap jumpers
+  share a Segment, and matching on the far Segment alone (which is what `SelfTest.ApplyRemoval` does) could take the wrong one.
+
+`SelfTest`'s **`T0223-tap-declared`** is the check: `T0223-tap-parallel` with coil 3's nine hand-listed jumpers replaced by a
+declaration of 8 loops. It applies the declaration, applies it again (nothing made), changes it to 1 loop and back (9 removed,
+2 made and removed, 9 restored) and must then print the same `Connectivity:` line as `T0223-tap-parallel` — it does.
+`RegulatingWinding.VerifySelf()` (under `-PCH_Verify YES`) pins the generator itself.
+

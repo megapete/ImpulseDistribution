@@ -77,7 +77,8 @@ Four mechanical points, each forced by something:
   should ask the same question.
 
 **A scenario names its connections as `SelfTest.LeadPoint`s, never as (Segment, location) pairs**, and `FindLead` goes and looks
-for the lead the point names. Neither half of the pair is knowable from the design file: which Segment is at the bottom of a coil
+for the lead the point names. (Since 2026-09-22 the types and the lookup live in `Wiring.swift`, shared with the regulating-winding
+declarations; `SelfTest`'s names are typealiases and thin wrappers, and its report text is unchanged.) Neither half of the pair is knowable from the design file: which Segment is at the bottom of a coil
 depends on how many there are, and its lead sits at `.inside_lower`, `.outside_lower` or `.center_lower` depending on winding type
 and disc count. A guessed one produces a connector `NodeAt` cannot resolve — which is the failure class this harness exists to
 catch, so it must not be able to manufacture it. Three kinds of point exist: `.coilEnd(coil:end:)`, `.gapLead(coil:gap:side:)`
@@ -296,3 +297,13 @@ current — coil 3's outer ends are a genuinely floating pair at **0.165 p.u.** 
 The last one is the reported failure. With the ground copied onto every jumpered lead it came back with coil 3's outer ends in
 `groundedNodes`, pinned at exactly 0, and a line-end gradient of 27.34 against the other two runs' 25.31 — the same picture on
 screen, a different model underneath. All three now print an identical `Connectivity:` line, and that is the regression check.
+
+## `T0223-tap-declared`: the same wiring from a regulating-winding declaration
+
+`T0223-tap-parallel` with coil 3's nine paralleling jumpers made by `Scenario.regulatingWindings` — a declaration of coil 3 as a
+double-stacked regulating winding of 8 loops, applied through `RegulatingWinding.Apply`, the path the menu command and the design
+load take — leaving only the tie to the HV neutral as a hand jumper. Declarations go on after the restructure and **before** the
+scenario's jumpers. The **REGULATING WINDINGS** section lists the nine jumpers made, then checks that applying the declaration
+again makes none, and that changing it to 1 loop and back removes and restores all nine. The run must print the same
+`Connectivity:` line as `T0223-tap-parallel`; see `docs/connectors-and-nodes.md`.
+
