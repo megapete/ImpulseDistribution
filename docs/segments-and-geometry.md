@@ -93,3 +93,31 @@ unconditionally — which also repairs the geometry after a combine/split/interl
 
 `PhaseModel` also holds `voltsPerTurn`, set by `AppController.recalculateModel` from the design file. It is the one place the model
 knows an *actual* operating voltage rather than a per-unit one; only the wound-in-shield paper sizing uses it so far.
+
+## Shields and static rings from the design file (file versions 5 and 6)
+
+`PchBasePackage` reads design file versions 4 to 6 (`../Claude/DesignSheet/PCH_ExcelDesignFile_v5_v6_changes.txt`). A version 6
+file gives each disc coil's **intershields**: turns per disc, the shield wire's bare radial dimension and its paper (two-sided,
+this program's convention too), and how many discs are shielded at the top and at the bottom. A version 5 file gives each coil's
+**static rings**: none, top only, or top and bottom. Opening a design puts both on the model, through the same paths the menu
+commands use. The shielded discs are paired from each end of the coil inwards, as *Add Wound-In Shields* pairs a selection. The
+connection is **floating**, because the file does not give one. The rings go on last, against the end Segments of the coil as it
+stands after pairing.
+
+**The geometry is the part to get right.** The design sheet counts the shields in the coil's `electricalRadialBuild`, in every
+inner diameter outside it, in the leg centres and in the tank. This program adds the shields' build itself, in
+`ApplyRadialBuildUp`. Read straight, a shielded design would therefore get its shields' width twice. The load takes it back out
+first: `AppController.DesignFileIntershieldsByCoil` works out from the file alone which coils' shields can be modelled.
+`createBasicSections` lays those coils out without the shields' build and moves every coil outside them in by the same amount.
+`updateModel` does the same to the leg centres and the tank. `ApplyRadialBuildUp` then puts it all back once the shields are on,
+so a design opens at the file's own radii, and *Remove Wound-In Shields* takes it to the coil without them. The amount taken out
+is the shields' build **without** the sheet's overbuild allowance. That is what `radialBuildAdder` adds back, so the opened
+geometry is exact; a coil with its shields removed keeps the allowance on their build, a few percent of it.
+
+A coil whose shields cannot be modelled gets an alert and keeps the file's width. Odd shielded-disc counts and fractional turns
+are caught before the layout, and the coil is laid out with the shields' build in it. A pair that would straddle a tapping gap,
+or swallow a node with a connection on it, is caught only after the layout. That coil is then held at the file's width by
+`radialBuildUpFloor`, which is the one use of the floor outside `SelfTest`. Either way the coil has the file's geometry and
+plain discs.
+
+The version 5 BILs and top edge pack are read and not used; see `TODO.md`.

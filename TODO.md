@@ -243,6 +243,19 @@ What has to come first is **geometry that is not in `PhaseModel` today**:
 Note also that some creep paths are better judged on **area** than length — a stick surface bridging a hilo, say — which is what
 `CreepPowerFrequencyByArea` (13.15) was implemented for and why it is worth keeping.
 
+## Design file versions 5 and 6
+
+Opening a design now puts its intershields and static rings on the model; see `docs/segments-and-geometry.md`. Left open:
+
+- **The shields' connection.** The file does not say how a shield is connected, so it opens floating. A shop that ties its
+  intershields to the line would need the file, or a preference, to say so; for now it is Remove and Add again.
+- **The BILs.** The file gives each coil's top, bottom and (for a dual-voltage coil) middle BIL. The impulse crest is still typed
+  into the simulation dialog. Offering the impulsed coil's BIL as the default there is the obvious use.
+- **The top edge pack.** Coils are still centred on the tallest coil's bottom edge pack plus half its height. The top edge pack
+  would say where the yoke actually is above each coil, which matters to a static ring's clearance and to the end-disc stresses.
+- **Shielded discs that are not at the ends, or not in pairs.** The file can only say "this many at the top, this many at the
+  bottom", which is what this program can model. An odd count is refused with an alert rather than rounded.
+
 ## Notes
 
 - There is no test target, so numerical changes are verified by hand against the books' worked examples.

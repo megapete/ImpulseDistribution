@@ -251,6 +251,20 @@ the ring's own 3.18 mm/side wrap. It does not recover *all* of it — the wrap i
 reachable before 2026-08-08**, because `SegmentAt` could not find a static ring at all (see `docs/segments-and-geometry.md`), so the
 ring was in the picture and out of the physics.
 
+## `STME0999-v6`: shields and static rings from the design file
+
+`STME-0999-v6_AndIn.txt` is `STME-0999_AndIn.txt` written as a version 6 file: the same 49 lines with the version field set to 6,
+then the count line (10) and ten lines that give the HV 350 kV BILs, a ring at each end, and 3 shield turns of 0.075" + 0.035" in
+its top 4 and bottom 2 discs. The design is otherwise untouched, inner diameters included. It was made by hand and lives only in
+the container with the other fixtures. Note that the original's lines end in LF CR, and the reader drops the empty lines that
+leaves, so a script that copies the first 49 lines has to drop them too.
+
+The scenario restructures nothing. What it is for is `DesignFileShieldingCheck`, which runs on any version 5 or later file
+straight after the load. It checks that the shields are on the right disc pairs with the file's turn count and that the rings are
+there. It then checks that every coil's radii, the leg centres and the tank are the file's to 1 nm. That last check catches the
+shields' build counted twice or not at all; see `docs/segments-and-geometry.md`. On this fixture the HV opens as 67 Segments, 3
+of them shielded pairs, at 290.164 to 355.816 mm. The plain `STME0999` report was unchanged when this went in.
+
 ## The S0738 fixture: a connection, not a winding
 
 `S0738` and `S0738-plain` (`S0738_AndIn.txt`, four coils, 1050 kV on the HV) are the first fixture here that is about **how the

@@ -265,13 +265,13 @@ enum SelfTest {
     ///
     /// The three variants differ ONLY in `restructure`, which is the point: same core, same conductor, same gaps, same
     /// impulse, so the line-end gradient can be read off three times and compared without anything else having moved.
-    private static func STME0999(name:String, notes:String, restructure:Restructure, staticRings:[StaticRing] = []) -> Scenario {
+    private static func STME0999(name:String, notes:String, restructure:Restructure, staticRings:[StaticRing] = [], fixtureName:String = "STME-0999_AndIn.txt") -> Scenario {
 
         return Scenario(name: name,
                         restructure: restructure,
                         matchedBuild: nil,
                         staticRings: staticRings,
-                        fixtureName: "STME-0999_AndIn.txt",
+                        fixtureName: fixtureName,
                         notes: "4160Y/2400 V LV (48-turn helical), 69 kV delta HV (70-disc continuous), 350 kV full wave on the HV line end. " + notes,
                         jumpers: [],
                         terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
@@ -338,6 +338,14 @@ enum SelfTest {
         //
         // They are also the only scenarios that fit a ring to a coil whose Segments were REBUILT after it was loaded, which is
         // the other half of the redesign - a ring is located by its geometry, so interleaving cannot renumber it into an orphan.
+        // The same design written as a version 6 file, with intershields and static rings that the load puts on by itself:
+        // 3 shield turns of 0.075" + 0.035" in the top 4 and bottom 2 HV discs, a ring at each end of the HV, and the
+        // geometry the file describes. See SelfTest.DesignFileShieldingCheck.
+        "STME0999-v6" : STME0999(name: "STME0999-v6",
+                                 notes: "Version 6 file: HV intershields (3 turns in the top 4 and bottom 2 discs) and static rings at both HV ends, all from the file.",
+                                 restructure: .none,
+                                 fixtureName: "STME-0999-v6_AndIn.txt"),
+
         "STME0999-rings" : STME0999(name: "STME0999-rings",
                                     notes: "HV as designed, with a static ring at each end of it.",
                                     restructure: .none,
@@ -910,6 +918,20 @@ enum SelfTest {
         guard let model = controller.currentModel else {
 
             return Report(text: text + "FAILED: no model was built.\n", summary: "FAILED - no model")
+        }
+
+        // What a version 5 or 6 file put on the model by itself, checked before anything else changes it
+        if (await xlFile.fileVersion ?? 4) >= 5 {
+
+            Stage("checking the design file's shields and static rings")
+
+            let designFileCheck = await DesignFileShieldingCheck(xlFile: xlFile, model: model)
+            text += designFileCheck.text
+
+            guard designFileCheck.ok else {
+
+                return Report(text: text, summary: "FAILED - " + designFileCheck.summary)
+            }
         }
 
         // The structural change goes in BEFORE the geometry is reported and before the terminations, because it swaps
@@ -1728,6 +1750,119 @@ enum SelfTest {
     ///      while the discs either side of it measured their gaps straight through it.
     ///   3. **Both sides of a ring agree about it.** A ring above Segment k IS the ring below Segment k+1. The two used to be
     ///      recovered by different routes, so an interior ring was visible from one side only.
+    /// What opening a version 5 or 6 design file put on the model by itself: the intershields (as wound-in shields on the disc
+    /// pairs at each end of the coil) and the static rings. See `AppController.DesignFileIntershieldsByCoil`.
+    ///
+    /// The geometry half is the one that matters. The design file counts the shields in a coil's radial build, in every inner
+    /// diameter outside it, in the leg centres and in the tank; the load takes all of that back out and `ApplyRadialBuildUp`
+    /// puts it back. So the model has to come out at the file's radii exactly, and a coil at the wrong width means the shields
+    /// were counted twice, or not at all.
+    private static func DesignFileShieldingCheck(xlFile:PCH_ExcelDesignFile, model:PhaseModel) async -> (ok:Bool, text:String, summary:String) {
+
+        var text = "DESIGN FILE SHIELDING (file version \(await xlFile.fileVersion ?? 4))\n"
+        text += String(repeating: "-", count: 110) + "\n"
+        var failures:[String] = []
+
+        let tolerance = 1.0E-9
+        let windings = await xlFile.windings
+        let allSegments = await model.segments
+        let coilSegments = await model.CoilSegments()
+
+        for (coil, nextWinding) in windings.enumerated() {
+
+            let discs = coilSegments.filter({ $0.radialPos == coil }).sorted(by: { $0.axialPos < $1.axialPos })
+
+            guard !discs.isEmpty else {
+
+                continue
+            }
+
+            var shielded:[Int] = []
+            var shieldTurns:Set<Int> = []
+
+            for (index, nextSegment) in discs.enumerated() {
+
+                if let shield = await nextSegment.woundInShield {
+
+                    shielded.append(index)
+                    shieldTurns.formUnion(shield.turnsPerDisc)
+                }
+            }
+
+            var r1 = Double.greatestFiniteMagnitude
+            var r2 = 0.0
+
+            for nextSegment in discs {
+
+                r1 = min(r1, await nextSegment.r1)
+                r2 = max(r2, await nextSegment.r2)
+            }
+
+            let fileR1 = nextWinding.innerDiameter / 2.0
+            let fileR2 = fileR1 + nextWinding.electricalRadialBuild
+
+            text += "  Coil \(coil): \(discs.count) Segments, \(shielded.count) shielded (turns per disc \(shieldTurns.sorted()))"
+            text += "   radii \(Millimetres(r1)) to \(Millimetres(r2)), file \(Millimetres(fileR1)) to \(Millimetres(fileR2))\n"
+
+            if abs(r1 - fileR1) > tolerance || abs(r2 - fileR2) > tolerance {
+
+                failures.append("coil \(coil) is not at the design file's radii")
+            }
+
+            if let intershields = nextWinding.intershields, nextWinding.intershieldRadialBuild > 0.0 {
+
+                let pairsBottom = intershields.discsBottom / 2
+                let pairsTop = intershields.discsTop / 2
+                let expected = Array(0..<pairsBottom) + Array((discs.count - pairsTop)..<discs.count)
+
+                if shielded != expected {
+
+                    failures.append("coil \(coil)'s shielded Segments are \(shielded), not \(expected)")
+                }
+
+                if shieldTurns != [Int(intershields.turnsPerDisc.rounded())] {
+
+                    failures.append("coil \(coil)'s shields have \(shieldTurns.sorted()) turns per disc, not \(intershields.turnsPerDisc)")
+                }
+
+                for index in shielded where discs[index].basicSections.count != 2 {
+
+                    failures.append("coil \(coil)'s shielded Segment \(index) is not a disc pair")
+                }
+            }
+            else if !shielded.isEmpty {
+
+                failures.append("coil \(coil) has shields the design file does not give it")
+            }
+
+            let rings = allSegments.filter({ $0.isStaticRing && $0.radialPos == coil }).count
+            let expectedRings = nextWinding.insulationData?.staticRings.rawValue ?? 0
+
+            text += "    static rings: \(rings), design file \(expectedRings)\n"
+
+            if rings != expectedRings {
+
+                failures.append("coil \(coil) has \(rings) static rings, not \(expectedRings)")
+            }
+        }
+
+        let legCenters = await model.core.legCenters
+        let fileLegCenters = await xlFile.core.legCenters
+        let tankDepth = await model.tankDepth
+        let fileTankDepth = await xlFile.tankDepth
+
+        text += "  Leg centres \(Millimetres(legCenters)), file \(Millimetres(fileLegCenters));  tank depth \(Millimetres(tankDepth)), file \(Millimetres(fileTankDepth))\n"
+
+        if abs(legCenters - fileLegCenters) > tolerance || abs(tankDepth - fileTankDepth) > tolerance {
+
+            failures.append("the leg centres or the tank are not the design file's")
+        }
+
+        text += failures.isEmpty ? "  OK\n\n" : failures.map({ "  FAILED: \($0)\n" }).joined() + "\n"
+
+        return (failures.isEmpty, text, failures.first ?? "")
+    }
+
     private static func StaticRingCheck(model:PhaseModel) async -> (ok:Bool, text:String, summary:String) {
 
         var text = ""

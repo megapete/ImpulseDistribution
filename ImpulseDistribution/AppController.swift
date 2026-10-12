@@ -595,16 +595,25 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
 
         if reinitialize {
             
+            // see DesignFileIntershieldsByCoil
+            var designFileIntershields:[Int:DesignFileIntershields] = [:]
+
             if let file = xlFile {
-                
-                self.tankDepth = await file.tankDepth
-                
+
+                designFileIntershields = await self.DesignFileIntershieldsByCoil(xlFile: file)
+
+                // The file's leg centres and tank have room for the intershields, and ApplyRadialBuildUp makes that room again
+                // once the shields are on, so the pristine core and tank are the design without them.
+                let totalIntershieldBuild = designFileIntershields.values.reduce(0.0, { $0 + $1.radialBuild })
+
+                self.tankDepth = await file.tankDepth - 2.0 * totalIntershieldBuild
+
                 // The idea here is to create the current model as a Core and an array of BasicSections and save it into the class' currentSections property
-                self.currentCore = await Core(diameter: file.core.diameter, realWindowHeight: file.core.windowHeight, legCenters: file.core.legCenters)
-                
+                self.currentCore = await Core(diameter: file.core.diameter, realWindowHeight: file.core.windowHeight, legCenters: file.core.legCenters - 2.0 * totalIntershieldBuild)
+
                 // replace any currently saved basic sections with the new ones
-                self.currentSections = await self.createBasicSections(xlFile: file)
-                
+                self.currentSections = await self.createBasicSections(xlFile: file, intershields: designFileIntershields)
+
                 self.currentXLfile = file
             }
             
@@ -624,6 +633,11 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             if let model = self.currentModel, let designFile {
 
                 await self.ApplySavedRegulatingWindings(RegulatingWindingStore.shared.windings(for: designFile), model: model)
+            }
+
+            if let model = self.currentModel, let file = xlFile {
+
+                await self.ApplyDesignFileShielding(xlFile: file, intershields: designFileIntershields, model: model)
             }
 
             self.initializeViews()
@@ -1349,8 +1363,10 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         return PhaseModel(segments: result, core: self.currentCore!, tankDepth: self.tankDepth)
     }
     
-    func createBasicSections(xlFile:PCH_ExcelDesignFile) async -> [BasicSection] {
-        
+    /// - Parameter intershields: The design file's intershields that will be put on the model, whose radial build is left out of
+    /// the layout here so that PhaseModel.ApplyRadialBuildUp can add it back. See DesignFileIntershieldsByCoil.
+    func createBasicSections(xlFile:PCH_ExcelDesignFile, intershields:[Int:DesignFileIntershields] = [:]) async -> [BasicSection] {
+
         // First off, we need to find the axial centers of the coils. We do this by finding the highest coil (max electrical height) and adding half that height to its bottom-edge-pack dimension. Other coils are then inserted into the model using that same center for all coils.
         var maxHeight = 0.0
         var maxHtEdgePack = 0.0
@@ -1372,6 +1388,12 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             
             var axialPos = 0
             let wType = nextWinding.windingType
+
+            // The file's layout with the intershields taken out: this coil's own, and the room every coil inside it made for its own
+            let ownIntershieldBuild = intershields[radialPos]?.radialBuild ?? 0.0
+            let innerIntershieldBuild = intershields.filter({ $0.key < radialPos }).values.reduce(0.0, { $0 + $1.radialBuild })
+            let pristineInnerRadius = nextWinding.innerDiameter / 2.0 - innerIntershieldBuild
+            let pristineRadialBuild = nextWinding.electricalRadialBuild - ownIntershieldBuild
             
             // let numMainRadialSections = 1 + (wType == .layer ? nextWinding.numRadialDucts : 0)
             
@@ -1444,7 +1466,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
                         
                         let wdgData = BasicSectionWindingData(type: wType == .disc ? .disc : .helical, discData: BasicSectionWindingData.DiscData(numAxialColumns: nextWinding.numAxialColumns, axialColumnWidth: nextWinding.spacerWidth), layers: BasicSectionWindingData.LayerData(numLayers: 1, interLayerInsulation: 0, ducts: BasicSectionWindingData.LayerData.DuctData(numDucts: 0, ductDimn: 0)), turn: BasicSectionWindingData.TurnData(radialDimn: nextWinding.turnDefinition.radialDimension, axialDimn: nextWinding.turnDefinition.axialDimension, turnInsulation: nextWinding.turnDefinition.cable.strandInsulation + nextWinding.turnDefinition.cable.insulation, resistancePerMeter: nextWinding.turnDefinition.resistancePerMeterAt20C, strandRadial: nextWinding.turnDefinition.cable.strandRadialDimension, strandAxial: nextWinding.turnDefinition.cable.strandAxialDimension))
                         
-                        let newBasicSection = BasicSection(location: LocStruct(radial: radialPos, axial: nextAxialPos), N: turnsPerDisc, I: nextWinding.I, wdgData: wdgData, rect: NSRect(x: nextWinding.innerDiameter / 2.0, y: currentZ, width: nextWinding.electricalRadialBuild, height: discHt))
+                        let newBasicSection = BasicSection(location: LocStruct(radial: radialPos, axial: nextAxialPos), N: turnsPerDisc, I: nextWinding.I, wdgData: wdgData, rect: NSRect(x: pristineInnerRadius, y: currentZ, width: pristineRadialBuild, height: discHt))
                         
                         result.append(newBasicSection)
                         
@@ -1486,7 +1508,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
                     multiStartData = BasicSectionWindingData.MultiStartData(numStarts: nextWinding.turnDefinition.multistartLoops, insulationBetweenStarts: nextWinding.turnDefinition.axialGapBetweenCables, gapBetweenGroups: nextWinding.stdAxialGap * 0.98)
                 }
 
-                let newBasicSection = BasicSection(location: LocStruct(radial: radialPos, axial: axialPos), N: nextWinding.numTurns.max, I: nextWinding.I, wdgData: BasicSectionWindingData(type: bsWdgType, discData: BasicSectionWindingData.DiscData(numAxialColumns: nextWinding.numAxialColumns, axialColumnWidth: nextWinding.spacerWidth), layers: layerData, turn: turnData, multiStart: multiStartData), rect: NSRect(x: nextWinding.innerDiameter / 2.0, y: axialCenter - nextWinding.electricalHeight / 2.0, width: nextWinding.electricalRadialBuild, height: nextWinding.electricalHeight))
+                let newBasicSection = BasicSection(location: LocStruct(radial: radialPos, axial: axialPos), N: nextWinding.numTurns.max, I: nextWinding.I, wdgData: BasicSectionWindingData(type: bsWdgType, discData: BasicSectionWindingData.DiscData(numAxialColumns: nextWinding.numAxialColumns, axialColumnWidth: nextWinding.spacerWidth), layers: layerData, turn: turnData, multiStart: multiStartData), rect: NSRect(x: pristineInnerRadius, y: axialCenter - nextWinding.electricalHeight / 2.0, width: pristineRadialBuild, height: nextWinding.electricalHeight))
                 
                 result.append(newBasicSection)
             }
@@ -4456,6 +4478,222 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             catch {
 
                 self.PCH_ErrorAlert(message: "The regulating winding declared on coil \(nextWinding.coil) was not applied.", info: "\(error.localizedDescription) \((error as? RegulatingWinding.DeclarationError)?.info ?? "")")
+            }
+        }
+    }
+
+    /// The intershields a design file declares on one coil (file version 6), as this program puts them on the model.
+    struct DesignFileIntershields {
+
+        /// The shield for one disc pair: the file's turns per disc, and its wire. The file does not say how the shield is
+        /// connected, so it is floating, which is DelVecchio's base case; a different connection is Remove and Add again.
+        let shield:Segment.WoundInShield
+
+        /// The number of shielded discs at each end of the coil, both even
+        let discsBottom:Int
+        let discsTop:Int
+
+        /// What the shields add to the coil's radial build, which is exactly the shield's own radialBuildAdder
+        var radialBuild:Double {
+
+            return self.shield.radialBuildAdder
+        }
+    }
+
+    /// The intershields of every coil in `xlFile` that this program can model, keyed by coil (the radial position, which is the
+    /// winding's index in the file). A coil whose shields cannot be modelled gets an alert and no entry, and is then laid out at
+    /// the width the file gives it, shields included, with nothing to say they are there.
+    ///
+    /// **This decides the layout, so it is worked out from the file alone, before a single BasicSection exists.** The design sheet
+    /// counts the shields in a coil's radial build and in every inner diameter outside it (and so in the leg centres and the tank),
+    /// and this program adds the shields' build itself, in PhaseModel.ApplyRadialBuildUp. createBasicSections therefore takes the
+    /// shields' build back out of the pristine layout of every coil listed here, and ApplyRadialBuildUp puts it back once the
+    /// shields are on the model: a design opens at the geometry its file describes, and Remove Wound-In Shields takes it to the
+    /// coil without them, as it always has.
+    ///
+    /// The amount taken out is the shields' build without the radial overbuild allowance, which the sheet applies to it as well.
+    /// That is what ApplyRadialBuildUp adds back (radialBuildAdder has no allowance in it), so the opened geometry is the file's
+    /// exactly. The cost is that a coil with its shields removed keeps the allowance on the build they took, a few percent of it.
+    func DesignFileIntershieldsByCoil(xlFile:PCH_ExcelDesignFile) async -> [Int:DesignFileIntershields] {
+
+        var result:[Int:DesignFileIntershields] = [:]
+
+        for (coil, nextWinding) in await xlFile.windings.enumerated() {
+
+            guard let intershields = nextWinding.intershields, nextWinding.intershieldRadialBuild > 0.0 else {
+
+                continue
+            }
+
+            func Skip(_ info:String) {
+
+                self.PCH_ErrorAlert(message: "The intershields on coil \(coil) were not modelled.", info: info + " The coil is laid out at the width the design file gives it, but without the shields' capacitance.")
+            }
+
+            guard nextWinding.windingType == .disc else {
+
+                Skip("Only a disc coil can carry wound-in shields.")
+                continue
+            }
+
+            let shieldTurns = intershields.turnsPerDisc.rounded()
+
+            guard abs(intershields.turnsPerDisc - shieldTurns) < 1.0E-6, shieldTurns >= 1.0 else {
+
+                Skip("The design file gives \(intershields.turnsPerDisc) shield turns per disc, which is not a whole number.")
+                continue
+            }
+
+            guard intershields.discsBottom % 2 == 0, intershields.discsTop % 2 == 0 else {
+
+                Skip("A wound-in shield spans a disc pair, so the shielded discs at each end must be an even number. The design file gives \(intershields.discsBottom) at the bottom and \(intershields.discsTop) at the top.")
+                continue
+            }
+
+            guard intershields.discsBottom + intershields.discsTop <= nextWinding.numAxialSections else {
+
+                Skip("The design file shields \(intershields.discsBottom + intershields.discsTop) discs on a coil of \(nextWinding.numAxialSections).")
+                continue
+            }
+
+            // the same requirement as GetWoundInShieldDialog's: a shield turn goes between two coil turns
+            guard nextWinding.numTurns.max / Double(nextWinding.numAxialSections) >= 2.0 else {
+
+                Skip("A shield turn goes between two coil turns, so there have to be at least 2 turns per disc.")
+                continue
+            }
+
+            // The file's paper is the total over both sides, which is this program's convention for τ_w as well.
+            let wire = Segment.WoundInShieldWire(connection: .floating, bareRadial: intershields.conductorRadial, insulation: intershields.conductorPaper)
+
+            result[coil] = DesignFileIntershields(shield: Segment.WoundInShield(wire: wire, turnsPerDisc: Int(shieldTurns), pairCount: 1), discsBottom: intershields.discsBottom, discsTop: intershields.discsTop)
+        }
+
+        return result
+    }
+
+    /// Put the design file's intershields and static rings on a freshly loaded model, whose coils are still one disc to a Segment.
+    ///
+    /// The shielded discs are paired into two-disc Segments exactly as doAddWoundInShields pairs a selection, from each end of the
+    /// coil inwards. That path's guards apply here too: a pair may not straddle a tapping gap, and may not swallow a node carrying a
+    /// connection (a regulating winding declared on the design is applied before this). A coil that fails either keeps its discs
+    /// unpaired and unshielded, and its radial build is held at the file's width with PhaseModel's build-up floor, because
+    /// createBasicSections has already taken the shields' build out of the layout.
+    ///
+    /// Static rings go on after the shields, so a ring sits against the end Segment of the coil as it finally stands.
+    func ApplyDesignFileShielding(xlFile:PCH_ExcelDesignFile, intershields:[Int:DesignFileIntershields], model:PhaseModel) async {
+
+        let core = await model.core
+
+        for coil in intershields.keys.sorted() {
+
+            guard let plan = intershields[coil] else {
+
+                continue
+            }
+
+            func HoldAtFileWidth(_ info:String) async {
+
+                var floor = await model.radialBuildUpFloor
+                floor[coil] = max(floor[coil] ?? 0.0, plan.radialBuild)
+                await model.SetRadialBuildUpFloor(floor)
+
+                self.PCH_ErrorAlert(message: "The intershields on coil \(coil) were not modelled.", info: info + " The coil is held at the width the design file gives it, but without the shields' capacitance.")
+            }
+
+            let discs = await model.CoilSegments().filter({ $0.radialPos == coil }).sorted(by: { $0.axialPos < $1.axialPos })
+
+            guard discs.allSatisfy({ $0.basicSections.count == 1 }), plan.discsBottom + plan.discsTop <= discs.count else {
+
+                await HoldAtFileWidth("The coil's discs were not one to a Segment.")
+                continue
+            }
+
+            var pairs:[(lower:Segment, upper:Segment)] = []
+
+            for i in stride(from: 0, to: plan.discsBottom, by: 2) {
+
+                pairs.append((discs[i], discs[i + 1]))
+            }
+
+            for i in stride(from: discs.count - plan.discsTop, to: discs.count, by: 2) {
+
+                pairs.append((discs[i], discs[i + 1]))
+            }
+
+            var refusal:String? = nil
+
+            for nextPair in pairs {
+
+                if await model.IsTappingGap(segment1: nextPair.lower, segment2: nextPair.upper) {
+
+                    refusal = "A shielded disc pair would straddle a tapping gap."
+                    break
+                }
+
+                if let stranded = await self.SelectionStrandedConnection(model: model, segments: [nextPair.lower, nextPair.upper]) {
+
+                    refusal = "Pairing the discs would destroy the node a connection is attached to (\(stranded))."
+                    break
+                }
+            }
+
+            if let refusal {
+
+                await HoldAtFileWidth(refusal)
+                continue
+            }
+
+            do {
+
+                var newSegments:[Segment] = []
+
+                for nextPair in pairs {
+
+                    // The shield goes on before the Segment goes into the model, as doAddWoundInShields does it
+                    let newSegment = try Segment(basicSections: [nextPair.lower.basicSections[0], nextPair.upper.basicSections[0]], realWindowHeight: core.realWindowHeight, useWindowHeight: core.adjustedWindHt)
+                    await newSegment.SetWoundInShield(plan.shield)
+                    newSegments.append(newSegment)
+                }
+
+                let oldSegments = pairs.flatMap({ [$0.lower, $0.upper] })
+
+                await model.RemoveSegments(badSegments: oldSegments)
+                try await model.UpdateConnectors(oldSegments: oldSegments, newSegments: newSegments)
+                try await model.AddSegments(newSegments: newSegments)
+            }
+            catch {
+
+                await HoldAtFileWidth(error.localizedDescription)
+            }
+        }
+
+        for (coil, nextWinding) in await xlFile.windings.enumerated() {
+
+            guard let staticRings = nextWinding.insulationData?.staticRings, staticRings != .none else {
+
+                continue
+            }
+
+            let coilSegments = await model.CoilSegments().filter({ $0.radialPos == coil }).sorted(by: { $0.axialPos < $1.axialPos })
+
+            guard let bottom = coilSegments.first, let top = coilSegments.last else {
+
+                continue
+            }
+
+            do {
+
+                try await model.InsertSegment(newSegment: try await model.AddStaticRing(adjacentSegment: top, above: true))
+
+                if staticRings == .topAndBottom {
+
+                    try await model.InsertSegment(newSegment: try await model.AddStaticRing(adjacentSegment: bottom, above: false))
+                }
+            }
+            catch {
+
+                self.PCH_ErrorAlert(message: "The static rings on coil \(coil) were not added.", info: error.localizedDescription)
             }
         }
     }
