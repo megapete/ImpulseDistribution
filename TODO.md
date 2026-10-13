@@ -249,8 +249,8 @@ Opening a design now puts its intershields and static rings on the model; see `d
 
 - **The shields' connection.** The file does not say how a shield is connected, so it opens floating. A shop that ties its
   intershields to the line would need the file, or a preference, to say so; for now it is Remove and Add again.
-- **The BILs.** The file gives each coil's top, bottom and (for a dual-voltage coil) middle BIL. The impulse crest is still typed
-  into the simulation dialog. Offering the impulsed coil's BIL as the default there is the obvious use.
+- **The BILs beyond the crest.** The simulation dialog's crest now defaults to the BIL at the impulsed lead
+  (`AppController.ImpulsedLeadBIL`). Nothing else uses the BILs yet; the stress report's allowables are the obvious next place.
 - **The top edge pack.** Coils are still centred on the tallest coil's bottom edge pack plus half its height. The top edge pack
   would say where the yoke actually is above each coil, which matters to a static ring's clearance and to the end-disc stresses.
 - **Shielded discs that are not at the ends, or not in pairs.** The file can only say "this many at the top, this many at the

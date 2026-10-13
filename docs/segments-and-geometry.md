@@ -120,4 +120,7 @@ or swallow a node with a connection on it, is caught only after the layout. That
 `radialBuildUpFloor`, which is the one use of the floor outside `SelfTest`. Either way the coil has the file's geometry and
 plain discs.
 
-The version 5 BILs and top edge pack are read and not used; see `TODO.md`.
+The version 5 BILs set the default crest in the simulation dialog: `AppController.ImpulsedLeadBIL` takes the BIL at the lead
+carrying the impulse termination. That is the top BIL for a coil's top lead, the bottom BIL for its bottom lead, and the middle
+BIL for a centre lead of a dual-voltage coil, with the highest if several leads are impulsed. Without a BIL the dialog opens at
+`SimDetailsDlog.fallbackCrestKV`, the 30 kV it always used. The top edge pack is read and not used; see `TODO.md`.

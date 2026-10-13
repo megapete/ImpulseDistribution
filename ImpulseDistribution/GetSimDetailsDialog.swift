@@ -40,9 +40,16 @@ class SimDetailsDlog : PCH_DialogBox {
     /// is the signal to raise it.
     static let defaultBandwidthMHz = 10.0
 
-    init(waveFormStrings:[String]) {
+    /// The crest the voltage field opens with, in kV. See AppController.ImpulsedLeadBIL.
+    let defaultCrestKV:Double
+
+    /// What the voltage field opened with before a design file could say: a placeholder, not a test level.
+    static let fallbackCrestKV = 30.0
+
+    init(waveFormStrings:[String], defaultCrestKV:Double? = nil) {
 
         self.waveFormStrings = waveFormStrings
+        self.defaultCrestKV = defaultCrestKV ?? SimDetailsDlog.fallbackCrestKV
 
         super.init(viewNibFileName: "GetSimDetailsView", windowTitle: "Simulation Setup", hideCancel: false)
     }
@@ -76,7 +83,7 @@ class SimDetailsDlog : PCH_DialogBox {
             waveFormPopUp.addItems(withTitles: waveFormStrings)
 
             voltageField.formatter = NumberFormatter()
-            voltageField.integerValue = 30
+            voltageField.doubleValue = defaultCrestKV
 
             let bandwidthFormatter = NumberFormatter()
             bandwidthFormatter.minimumFractionDigits = 0

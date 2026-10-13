@@ -1722,14 +1722,80 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             return
         }
 
-        var waveForms:[String] = []
-        SimulationModel.WaveForm.Types.allCases.forEach {
+        // The default crest is read off the model, which is an actor, so the dialog goes up from a Task
+        Task {
 
-            waveForms.append($0.rawValue)
+            self.doSimulate(simDetailsDlog: await self.MakeSimDetailsDialog())
         }
-        
-        let simDetailsDlog = SimDetailsDlog(waveFormStrings: waveForms)
-        
+    }
+
+    /// The simulation setup dialog, with the impulse crest defaulting to the BIL at the impulsed lead (see ImpulsedLeadBIL)
+    func MakeSimDetailsDialog() async -> SimDetailsDlog {
+
+        let waveForms = SimulationModel.WaveForm.Types.allCases.map({ $0.rawValue })
+
+        return SimDetailsDlog(waveFormStrings: waveForms, defaultCrestKV: await self.ImpulsedLeadBIL())
+    }
+
+    /// The BIL, in kV, at the lead the impulse is applied to, from the design file (version 5 and later), or nil if the file
+    /// does not give one or no lead is impulsed yet.
+    ///
+    /// The lead is the one the user clicked: a termination lives only there (CLAUDE.md, rule 6), so a lead that is impulsed
+    /// through a jumper does not count, and the BIL is the one at the place the impulse goes in. The top lead of a coil takes its
+    /// top BIL and the bottom lead its bottom BIL. A lead at the centre of a coil takes the middle BIL of a dual-voltage coil,
+    /// which is the one place the file gives a BIL that is not at an end; a centre lead of any other coil is a tap and has
+    /// none. With more than one lead impulsed, it is the highest of their BILs.
+    func ImpulsedLeadBIL() async -> Double? {
+
+        guard let model = self.currentModel, let xlFile = self.currentXLfile else {
+
+            return nil
+        }
+
+        let windings = await xlFile.windings
+        let coilSegments = await model.CoilSegments()
+        var result:Double? = nil
+
+        for nextSegment in coilSegments {
+
+            let coil = nextSegment.radialPos
+
+            guard coil < windings.count, let insulation = windings[coil].insulationData else {
+
+                continue
+            }
+
+            let coilAxialPositions = coilSegments.filter({ $0.radialPos == coil }).map({ $0.axialPos })
+
+            for nextConnection in await nextSegment.connections where nextConnection.connector.toLocation == .impulse {
+
+                var bil:Double? = nil
+
+                if nextConnection.connector.fromIsUpper && nextSegment.axialPos == coilAxialPositions.max() {
+
+                    bil = insulation.topBIL
+                }
+                else if nextConnection.connector.fromIsLower && nextSegment.axialPos == coilAxialPositions.min() {
+
+                    bil = insulation.bottomBIL
+                }
+                else if nextConnection.connector.fromIsCenter {
+
+                    bil = insulation.midBIL
+                }
+
+                if let bil, bil > 0.0 {
+
+                    result = max(result ?? 0.0, bil)
+                }
+            }
+        }
+
+        return result
+    }
+
+    func doSimulate(simDetailsDlog:SimDetailsDlog) {
+
         if simDetailsDlog.runModal() == .OK {
 
             let peakVoltage = simDetailsDlog.voltageField.doubleValue * 1000
@@ -1820,13 +1886,13 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             return
         }
 
-        var waveForms:[String] = []
-        SimulationModel.WaveForm.Types.allCases.forEach {
+        Task {
 
-            waveForms.append($0.rawValue)
+            self.doCompareSolvers(simDetailsDlog: await self.MakeSimDetailsDialog())
         }
+    }
 
-        let simDetailsDlog = SimDetailsDlog(waveFormStrings: waveForms)
+    func doCompareSolvers(simDetailsDlog:SimDetailsDlog) {
 
         guard simDetailsDlog.runModal() == .OK else {
 

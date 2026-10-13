@@ -263,7 +263,8 @@ The scenario restructures nothing. What it is for is `DesignFileShieldingCheck`,
 straight after the load. It checks that the shields are on the right disc pairs with the file's turn count and that the rings are
 there. It then checks that every coil's radii, the leg centres and the tank are the file's to 1 nm. That last check catches the
 shields' build counted twice or not at all; see `docs/segments-and-geometry.md`. On this fixture the HV opens as 67 Segments, 3
-of them shielded pairs, at 290.164 to 355.816 mm. The plain `STME0999` report was unchanged when this went in.
+of them shielded pairs, at 290.164 to 355.816 mm. Its TERMINATIONS section also prints the dialog's default crest, which must be
+the HV's 350 kV top BIL. A version 5 or later file that impulses a lead with no BIL fails the run. The plain `STME0999` report was unchanged when this went in.
 
 ## The S0738 fixture: a connection, not a winding
 

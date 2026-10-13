@@ -1140,6 +1140,23 @@ enum SelfTest {
             }
         }
 
+        // What the simulation dialog would open with. A version 5 or later file gives every coil its BILs, so an impulsed end
+        // lead has to find one there.
+        if let crest = await controller.ImpulsedLeadBIL() {
+
+            text += "  Default crest: \(crest) kV, the BIL at the impulsed lead\n"
+        }
+        else {
+
+            text += "  Default crest: \(SimDetailsDlog.fallbackCrestKV) kV (no BIL at the impulsed lead)\n"
+
+            if (await xlFile.fileVersion ?? 4) >= 5, scenario.terminations.contains(where: { $0.type == .impulse }) {
+
+                text += "  FAILED: a version 5 file gives every coil a BIL, but none was found at the impulsed lead\n"
+                terminationsOK = false
+            }
+        }
+
         text += "\n"
 
         guard terminationsOK else {
