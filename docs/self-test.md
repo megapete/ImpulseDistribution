@@ -332,3 +332,11 @@ with something that preserves them. Coil 2 is impulsed at the top and grounded a
 neutral and its top is free, and coil 3 is declared a regulating winding, which must make no jumpers and must not fail. The run goes
 through the transient; coil 3's `Series C (coil)` is 12.12's C_ms (1.221319e-9 F), checked by hand in `docs/capacitance.md`.
 
+
+## `T0239-ltc-bridged` / `T0239-ltc-full`: a winding cut for an LTC
+
+`T0239_AndIn.txt` (copy it into the container from the TME-239 job folder) is a 600Y LV sheet, a 40-disc 13.1 kV delta HV and a
+24-disc double-stacked tapping winding for an on-load tap changer. Both scenarios cut the HV between discs 20 and 21 with an
+`.remove` edit on the series crossover — the only way to make that break — and then wire the two new leads, found as
+`.gapLead(coil: 1, gap: 0, …)`: tied straight back together, or with the whole tapping winding in series between them. They exist
+for `PhaseModel.RemoveConnection`; see "Cutting a winding for an LTC" in `docs/connectors-and-nodes.md`.

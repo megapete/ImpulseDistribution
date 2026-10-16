@@ -403,8 +403,61 @@ enum SelfTest {
         "T0223-tap-declared" : T0223TapParallel(name: "T0223-tap-declared", neutralTie: .outerEnds, declared: true),
 
         // T0223 with coil 3 rebuilt as an 8-start MULTI-START tap winding - the first model here with one in it. See T0223MultiStart.
-        "T0223-multistart" : T0223MultiStart(name: "T0223-multistart")
+        "T0223-multistart" : T0223MultiStart(name: "T0223-multistart"),
+
+        // The T0239 fixture's delta HV broken in the middle for an on-load tap changer - the break made by REMOVING the series
+        // jumper between the two centremost discs, which is the only way to make it. See T0239LTC. "bridged" ties the two new
+        // leads straight back together (no taps in circuit); "full" puts the whole tap winding in series between them.
+        "T0239-ltc-bridged" : T0239LTC(name: "T0239-ltc-bridged", tapsInCircuit: false),
+        "T0239-ltc-full" : T0239LTC(name: "T0239-ltc-full", tapsInCircuit: true)
     ]
+
+    /// The T0239 fixture: a 600Y LV sheet (coil 0), a 13.1 kV delta HV of 40 continuous discs (coil 1), and a 24-disc
+    /// double-stacked tapping winding (coil 2) for an on-load tap changer.
+    ///
+    /// The HV is an ordinary continuous winding in the design file, with no gap in it. On the real unit its circuit is broken
+    /// between discs 20 and 21 and the two leads there go to the LTC, which either ties them together or puts some or all of the
+    /// tapping winding in series between them. The user makes that break by removing the series jumper between the two discs,
+    /// and `PhaseModel.RemoveConnection` turns it into a gap with a floating lead on each side. Until it did, the removal left
+    /// nothing at the break to connect to, so neither connection below could be made at all.
+    ///
+    /// The tapping winding's bottom is tied to the HV's lower centre lead in BOTH variants, as it is on the selector. With
+    /// `tapsInCircuit` its two stacks are put in series (its own centre gap bridged) and its top goes to the HV's upper centre
+    /// lead, so all of it is in the HV circuit; without, the HV's two centre leads are tied straight together and the tapping
+    /// winding hangs off the lower one.
+    private static func T0239LTC(name:String, tapsInCircuit:Bool) -> Scenario {
+
+        var edits:[Edit] = [.remove(Jumper(from: .discCrossover(coil: 1, disc: 20), to: .discCrossover(coil: 1, disc: 21))),
+                            .jumper(Jumper(from: .gapLead(coil: 1, gap: 0, side: .bottom), to: .coilEnd(coil: 2, end: .bottom)))]
+
+        if tapsInCircuit {
+
+            edits.append(.jumper(Jumper(from: .gapLead(coil: 2, gap: 0, side: .bottom), to: .gapLead(coil: 2, gap: 0, side: .top))))
+            edits.append(.jumper(Jumper(from: .coilEnd(coil: 2, end: .top), to: .gapLead(coil: 1, gap: 0, side: .top))))
+        }
+        else {
+
+            edits.append(.jumper(Jumper(from: .gapLead(coil: 1, gap: 0, side: .bottom), to: .gapLead(coil: 1, gap: 0, side: .top))))
+        }
+
+        return Scenario(name: name,
+                        restructure: .none,
+                        matchedBuild: nil,
+                        fixtureName: "T0239_AndIn.txt",
+                        notes: "Three coils: coil 0 a 20-turn 600Y LV sheet, coil 1 the 757-turn 13.1 kV delta HV (40 discs) broken between discs 20 and 21 for an LTC, coil 2 a 156-turn double-stacked tapping winding (24 discs). \(tapsInCircuit ? "The whole tapping winding in series in the HV break." : "The HV break tied straight back together, tapping winding hanging off its lower lead.") LV grounded at both ends; HV bottom grounded, full wave on the HV top.",
+                        jumpers: [],
+                        terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 0, end: .top), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .top), type: .impulse)],
+                        edits: edits,
+                        waveFormType: .FullWave,
+                        peakVoltage: 95.0e3,
+                        displaySpan: 100.0e-6,
+                        bandwidth: 10.0e6,
+                        continuumCoil: 1,
+                        reportNodes: true)
+    }
 
     /// The T0223 fixture: four coils, of which coil 1 is a 17-turn SHEET winding with two 0.25" cooling ducts in it and 0.010"
     /// of insulation in every gap.
@@ -2044,8 +2097,8 @@ enum SelfTest {
 
     /// Take a jumper back out, the way `TransformerView.mouseDownWithRemoveConnector` does.
     ///
-    /// The UI hands `Segment.RemoveConnection` one of the connections the drawn line stands for, and that routine sweeps the whole
-    /// equivalence class - which is what makes clicking any one copy of a cross-product jumper take all of them. Here the copy is
+    /// The UI hands `PhaseModel.RemoveConnection` one of the connections the drawn line stands for, and `Segment.RemoveConnection`
+    /// under it sweeps the whole equivalence class (and the model cuts a gap if the jumper was a series one) - which is what makes clicking any one copy of a cross-product jumper take all of them. Here the copy is
     /// found rather than clicked: whichever connection on the `from` lead's Segment names the `to` lead's Segment.
     private static func ApplyRemoval(_ jumper:Jumper, model:PhaseModel) async -> String {
 
@@ -2069,7 +2122,7 @@ enum SelfTest {
             return "FAILED: \(label): segment \(fromSegment.serialNumber) has no connection to segment \(toSegment.serialNumber)"
         }
 
-        let affected = await fromSegment.RemoveConnection(segments: model.segments, connection: victim)
+        let affected = await model.RemoveConnection(from: fromSegment, connection: victim)
 
         return "\(label): \(affected.count) segment(s) affected \(affected.sorted())"
     }

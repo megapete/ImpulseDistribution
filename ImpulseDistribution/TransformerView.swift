@@ -2295,8 +2295,13 @@ class TransformerView: NSView, NSViewToolTipOwner, NSMenuItemValidation {
                         return
                     }
                     
-                    // var removeMask:[Segment] = []
-                    let affectedSegments = await nextViewConnector.segments.from.RemoveConnection(segments: self.allSegments, connection: Segment.Connection(segmentID: nextViewConnector.segments.to?.serialNumber, connector: nextViewConnector.connector))
+                    // Through the model rather than straight to the Segment: removing the series jumper between two discs cuts the
+                    // winding there, and the model puts a lead on each side of the break so that it can be connected to again.
+                    let affectedSegments = await model.RemoveConnection(from: nextViewConnector.segments.from, connection: Segment.Connection(segmentID: nextViewConnector.segments.to?.serialNumber, connector: nextViewConnector.connector))
+
+                    // The clicked connector is gone, so its highlight must go with it; left set, it stays on screen as a faint
+                    // ghost of the connection until the mouse next moves.
+                    self.highlightedConnectorPath = nil
                     
                     // we will be removing ALL the ViewConnectors that are associated with the affected Segments. Since we show the ViewConnectors in a way that keeps "moving forward" (up), we need to also keep the previous segments (as long as they are on the same coil) out of thh maskSegments array
                     var adjacentSegments:[Segment] = []

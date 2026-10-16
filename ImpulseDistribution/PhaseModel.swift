@@ -586,8 +586,9 @@ actor PhaseModel /*:Codable */ {
     /// connector described. That failure is what `SelfTest`'s S0738 scenario provokes.
     ///
     /// The repair is to recognise a gap the way `NodeAt` already does, by the LOCATION rather than by the termination.
-    /// `outside_center` and `inside_center` are created in exactly one place - AppController's segment-building loop, at a
-    /// tapping/DV gap - and `Connector.AlternatingLocation` only ever pairs a centre location with another centre location, while
+    /// `outside_center` and `inside_center` are created in exactly two places, both of them at a break in the winding -
+    /// AppController's segment-building loop, at a tapping/DV gap, and `RemoveConnection`, when the user cuts a series
+    /// connection (an LTC break) - and `Connector.AlternatingLocation` only ever pairs a centre location with another centre location, while
     /// a real series connection always maps an upper location to a lower one. So a centre connection means "gap", permanently,
     /// and nothing the user does to the lead can take that back.
     ///
@@ -632,6 +633,141 @@ actor PhaseModel /*:Codable */ {
         return false
     }
     
+    /// Remove a connection, the way *Remove Connector* mode does, and if it was the SERIES connection between two axially adjacent
+    /// Segments of a coil, cut the winding there: each side gets a floating lead of its own, so the break is a gap like any other.
+    ///
+    /// # Why removing a series jumper has to leave leads behind
+    ///
+    /// A delta winding feeding an on-load tap changer is broken in the middle so that the two leads there can go to the LTC, which
+    /// either ties them together or puts some or all of a separate tapping winding in series between them. Nothing in the design
+    /// file says so - the coil is an ordinary continuous winding - so the user makes the break by removing the series jumper
+    /// between the two centremost discs. `Segment.RemoveConnection` on its own deletes the jumper and nothing else, which leaves
+    /// both discs with NO connector at the break: there is nothing drawn there and so nothing to click, and the two new ends of
+    /// the winding cannot be connected to anything.
+    ///
+    /// So the break is turned into exactly what `AppController`'s segment-building loop makes at a tapping gap: a floating lead
+    /// at `outside_center` (or `inside_center`, on the side the crossover was) on each of the two Segments. That makes it a gap to
+    /// every routine that knows about gaps - `IsTappingGap` (and so `SetNodes` and `NonAdjacentConnections`), `Wiring.InternalGaps`
+    /// and `.gapLead`, `AppController.SelectionSpansTappingGap` - and bridging it again with a jumper between the two leads is the
+    /// LTC's "no taps in circuit" position, which the solver ties up explicitly like any bridged gap.
+    ///
+    /// # When a centre lead would be ambiguous
+    ///
+    /// `NodeAt` resolves a centre location to "the dangling node of this Segment", and a Segment whose OTHER end also dangles (it
+    /// is the end of its coil, or there is already a break on its far side) has two of those. A centre lead there would land on
+    /// whichever comes first in the node store. In that case the lead goes on at the crossover's own upper/lower location
+    /// instead, which `NodeAt` resolves unambiguously and which `IsTappingGap` still reads as facing a gap while it floats.
+    ///
+    /// - Returns: The serial numbers of every Segment whose connections changed, for the view to redraw.
+    func RemoveConnection(from segment:Segment, connection:Segment.Connection) async -> [Int] {
+
+        let seriesBreak = await self.SeriesBreak(from: segment, connection: connection)
+
+        var result = await segment.RemoveConnection(segments: self.segments, connection: connection)
+
+        guard let seriesBreak else {
+
+            return result
+        }
+
+        // The jumper may have been one of several between the two Segments (a cross-product copy of something else). If anything
+        // still ties them, the winding is not broken and there is nothing to cut.
+        if await seriesBreak.below.connections.contains(where: { $0.segmentID == seriesBreak.above.serialNumber }) {
+
+            return result
+        }
+
+        let centreLocation:Connector.Location = seriesBreak.isInside ? .inside_center : .outside_center
+
+        for (gapSegment, crossoverLocation, farEndBelow) in [(seriesBreak.below, seriesBreak.belowLocation, true), (seriesBreak.above, seriesBreak.aboveLocation, false)] {
+
+            let connections = await gapSegment.connections
+            let alreadyCarriesCentre = connections.contains(where: { $0.connector.fromIsCenter })
+            let farEndDangles = await self.EndDangles(of: gapSegment, below: farEndBelow)
+
+            let leadLocation = alreadyCarriesCentre || farEndDangles ? crossoverLocation : centreLocation
+
+            if connections.contains(where: { $0.segmentID == nil && $0.connector.fromLocation == leadLocation }) {
+
+                continue
+            }
+
+            await gapSegment.AppendConnection(connection: Segment.Connection(segmentID: nil, connector: Connector(fromLocation: leadLocation, toLocation: .floating)))
+
+            if !result.contains(gapSegment.serialNumber) {
+
+                result.append(gapSegment.serialNumber)
+            }
+        }
+
+        return result
+    }
+
+    /// If `connection` on `segment` is the series connection between two axially adjacent Segments of the same coil, the two
+    /// Segments and the crossover's location on each; otherwise nil. A series connection always runs from an UPPER location on
+    /// the Segment below to a LOWER location on the Segment above (see AppController's segment-building loop), and a boundary that
+    /// is already a gap is not a series connection whatever is jumpered across it.
+    private func SeriesBreak(from segment:Segment, connection:Segment.Connection) async -> (below:Segment, above:Segment, belowLocation:Connector.Location, aboveLocation:Connector.Location, isInside:Bool)? {
+
+        guard let otherID = connection.segmentID, let other = self.CoilSegments().first(where: { $0.serialNumber == otherID }), self.CoilSegments().contains(segment), self.SegmentsAreAdjacent(segment1: segment, segment2: other) else {
+
+            return nil
+        }
+
+        guard let segmentIndex = self.segments.firstIndex(of: segment), let otherIndex = self.segments.firstIndex(of: other) else {
+
+            return nil
+        }
+
+        let segmentIsBelow = segmentIndex < otherIndex
+        let below = segmentIsBelow ? segment : other
+        let above = segmentIsBelow ? other : segment
+        // the connector as seen from the Segment below
+        let connector = segmentIsBelow ? connection.connector : connection.connector.Inverse()
+
+        guard connector.fromIsUpper && connector.toIsLower else {
+
+            return nil
+        }
+
+        guard await !self.IsTappingGap(segment1: below, segment2: above) else {
+
+            return nil
+        }
+
+        let isInside = connector.fromLocation == .inside_upper
+
+        return (below, above, connector.fromLocation, connector.toLocation, isInside)
+    }
+
+    /// Whether the end of `segment` facing `below` (or above, when false) is a dangling node: the end of its coil, or a break.
+    /// This is the same decision SetNodes makes for that boundary.
+    private func EndDangles(of segment:Segment, below:Bool) async -> Bool {
+
+        let coilSegments = self.CoilSegments().filter({ $0.radialPos == segment.radialPos })
+
+        guard let index = coilSegments.firstIndex(of: segment) else {
+
+            return true
+        }
+
+        let neighbourIndex = below ? index - 1 : index + 1
+
+        guard neighbourIndex >= 0, neighbourIndex < coilSegments.count else {
+
+            return true
+        }
+
+        let neighbour = coilSegments[neighbourIndex]
+
+        if await self.IsTappingGap(segment1: segment, segment2: neighbour) {
+
+            return true
+        }
+
+        return await !segment.connections.contains(where: { $0.segmentID == neighbour.serialNumber })
+    }
+
     /// The serial-number-using version of NodeAt() [see next function]
     func NodeAt(segmentID:Int, useFrom:Bool, connector:Connector) -> Node? {
         

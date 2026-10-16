@@ -12,7 +12,9 @@ lead in place).
 
 ## A tapping gap breaks the node chain even when it is bridged
 
-`outside_center`/`inside_center` connectors are created in exactly one place — `AppController:1030-1044`, at tapping/DV gaps — and
+`outside_center`/`inside_center` connectors are created in exactly two places, both at a break in the winding — `AppController`'s
+segment-building loop, at tapping/DV gaps, and `PhaseModel.RemoveConnection`, when the user cuts a series connection (see "Cutting
+a winding for an LTC" below) — and
 `Connector.AlternatingLocation` only ever pairs a center location with another center location; a real series connection between
 adjacent discs always maps an **upper** location to a **lower** one. So a center connector means "tapping gap", always. `SetNodes`
 therefore gives each side of a gap its own node, testing `IsTappingGap` *as well as* the presence of a connection — matching
@@ -65,6 +67,35 @@ are meant to be read together:
 
 `SelfTest`'s **`STRANDED`** run (`-PCH_SelfTest STRANDED`) puts a jumper on a node interleaving is about to swallow and checks all
 three: the guard sees it, neither end still names the other afterwards, and no node group ties the merged Segment's two terminals.
+
+## Cutting a winding for an LTC: removing a series jumper makes a gap (2026-10-16)
+
+A delta winding feeding an on-load tap changer is broken in the middle and the two leads there go to the LTC, which ties them
+together (no taps in circuit) or puts some or all of a separate tapping winding in series between them. The design file says
+nothing about it — the coil is an ordinary continuous winding — so the user makes the break in *Remove Connector* mode, by
+clicking the series jumper between the two centremost discs.
+
+`Segment.RemoveConnection` on its own just deletes the jumper. That left **no connector at all** at either new end of the winding:
+nothing drawn, nothing to hit-test, and so no way to jumper either end to the tapping winding. (The faint line that did appear
+was the hover highlight of the removed connector, which `mouseDownWithRemoveConnector` never cleared; it does now.) So the removal
+goes through **`PhaseModel.RemoveConnection(from:connection:)`**, which recognises a *series* connection — an upper location on
+the Segment below to a lower one on the axially adjacent Segment above, same coil, not already a gap, and nothing else still tying
+the two — and after the sweep puts a **floating centre lead** (`outside_center`, or `inside_center` if the crossover was at the ID)
+on each side. That is exactly what the segment-building loop makes at a tapping gap, so the break is a gap to everything:
+`IsTappingGap`/`SetNodes` (a node each side), `Wiring.InternalGaps` and `.gapLead`, `SelectionSpansTappingGap`. Jumpering the two
+leads back together is a bridged gap, tied up by the solver like any other. Both `TransformerView` and `SelfTest.ApplyRemoval` call
+it; `Wiring.RemoveJumper` (regulating-winding ties, never series connections) does not.
+
+**The one exception is a Segment whose far end also dangles** — the end of its coil, or a break already on its other side. `NodeAt`
+resolves a centre location to *the* dangling node of the Segment, and there would be two. There the lead goes on at the crossover's
+own upper/lower location instead, which `NodeAt` resolves unambiguously and which `IsTappingGap` still reads as a gap while it
+floats. (The same ambiguity exists for a design-file tapping gap on a Segment that has been folded to the end of its coil; that is
+older than this and is not addressed here.)
+
+`SelfTest`'s **`T0239-ltc-bridged`** and **`T0239-ltc-full`** are the check: T0239's 40-disc delta HV cut between discs 20 and 21,
+then tied straight back (tapping winding hanging off the lower lead) or with the whole 24-disc double-stacked tapping winding in
+series in the break. Both report 70 nodes (69 before the cut) and `VerifyNodeTopology` passes; the bridged run merges the two break
+nodes (`merge[22<-23,44]`).
 
 ## A termination lives only on the lead the user clicked
 

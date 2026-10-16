@@ -189,7 +189,8 @@ enum Wiring {
 
     /// The internal tapping/DV gaps of a coil, bottom to top, as the pair of Segments facing each other across each one.
     ///
-    /// A centre location is created in exactly one place - AppController's segment-building loop, at a tapping/DV gap - so a
+    /// A centre location is only ever created at a break in the winding - by AppController's segment-building loop at a
+    /// tapping/DV gap, or by `PhaseModel.RemoveConnection` when the user cuts a series connection for an LTC - so a
     /// Segment carrying one is a Segment facing across a gap, and two consecutive such Segments ARE a gap. The test is on the
     /// location and not on the lead still being floating, because a centre lead that has been jumpered and grounded is no longer
     /// floating and is still a gap (see `IsTappingGap` in docs/connectors-and-nodes.md).
