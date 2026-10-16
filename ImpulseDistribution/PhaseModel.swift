@@ -653,10 +653,10 @@ actor PhaseModel /*:Codable */ {
     ///
     /// # When a centre lead would be ambiguous
     ///
-    /// `NodeAt` resolves a centre location to "the dangling node of this Segment", and a Segment whose OTHER end also dangles (it
-    /// is the end of its coil, or there is already a break on its far side) has two of those. A centre lead there would land on
-    /// whichever comes first in the node store. In that case the lead goes on at the crossover's own upper/lower location
-    /// instead, which `NodeAt` resolves unambiguously and which `IsTappingGap` still reads as facing a gap while it floats.
+    /// `NodeAt` resolves a centre location to "the dangling node of this Segment". A Segment whose other end is the end of its coil
+    /// has two of those, and `NodeAt` tells them apart because a coil end is never a break. A Segment with a BREAK on its far side
+    /// as well cannot be told apart that way, so there the lead goes on at the crossover's own upper/lower location instead, which
+    /// `NodeAt` resolves unambiguously and which `IsTappingGap` still reads as facing a gap while it floats.
     ///
     /// - Returns: The serial numbers of every Segment whose connections changed, for the view to redraw.
     func RemoveConnection(from segment:Segment, connection:Segment.Connection) async -> [Int] {
@@ -683,9 +683,9 @@ actor PhaseModel /*:Codable */ {
 
             let connections = await gapSegment.connections
             let alreadyCarriesCentre = connections.contains(where: { $0.connector.fromIsCenter })
-            let farEndDangles = await self.EndDangles(of: gapSegment, below: farEndBelow)
+            let farEndIsBreak = await self.EndIsInternalBreak(of: gapSegment, below: farEndBelow)
 
-            let leadLocation = alreadyCarriesCentre || farEndDangles ? crossoverLocation : centreLocation
+            let leadLocation = alreadyCarriesCentre || farEndIsBreak ? crossoverLocation : centreLocation
 
             if connections.contains(where: { $0.segmentID == nil && $0.connector.fromLocation == leadLocation }) {
 
@@ -740,22 +740,22 @@ actor PhaseModel /*:Codable */ {
         return (below, above, connector.fromLocation, connector.toLocation, isInside)
     }
 
-    /// Whether the end of `segment` facing `below` (or above, when false) is a dangling node: the end of its coil, or a break.
-    /// This is the same decision SetNodes makes for that boundary.
-    private func EndDangles(of segment:Segment, below:Bool) async -> Bool {
+    /// Whether the end of `segment` facing `below` (or above, when false) is a break in the winding inside the coil - NOT the end
+    /// of the coil, which `NodeAt` can tell apart from a break. This is the same decision SetNodes makes for that boundary.
+    private func EndIsInternalBreak(of segment:Segment, below:Bool) async -> Bool {
 
         let coilSegments = self.CoilSegments().filter({ $0.radialPos == segment.radialPos })
 
         guard let index = coilSegments.firstIndex(of: segment) else {
 
-            return true
+            return false
         }
 
         let neighbourIndex = below ? index - 1 : index + 1
 
         guard neighbourIndex >= 0, neighbourIndex < coilSegments.count else {
 
-            return true
+            return false
         }
 
         let neighbour = coilSegments[neighbourIndex]
@@ -790,16 +790,30 @@ actor PhaseModel /*:Codable */ {
         let connIsUpper = useFrom ? connector.fromIsUpper : connector.toIsUpper
         let connIsLower = useFrom ? connector.fromIsLower : connector.toIsLower
         
-        for nextNode in nodeStore {
+        // A centre location (outside_center / inside_center) is only ever made at a break in the winding, and it resolves to the
+        // Segment's dangling node on that side. The location does not say WHICH side, so it is found: a Segment can dangle at both
+        // ends - most simply when every disc from the break to the end of the coil has been combined into it - and then the
+        // dangling node at the END OF THE COIL is never the one, because a coil end is not a break. Taking the first dangling node
+        // in the store, as this used to, gave the coil's bottom node to a centre lead on a folded lower half.
+        if !(connIsLower || connIsUpper) {
             
-            // coding gymnastics for floating connectors that are on the outside_center or inside_center (used for center-taping gaps)
-            if !(connIsLower || connIsUpper) {
+            let danglingNodes = nodeStore.filter({ $0.belowSegment == segment && $0.aboveSegment == nil || $0.aboveSegment == segment && $0.belowSegment == nil })
+            
+            guard danglingNodes.count > 1 else {
                 
-                if nextNode.belowSegment == segment && nextNode.aboveSegment == nil || nextNode.aboveSegment == segment && nextNode.belowSegment == nil {
-                    
-                    return nextNode
-                }
+                return danglingNodes.first
             }
+            
+            let coilSegments = self.CoilSegments().filter({ $0.radialPos == segment.radialPos })
+            let isCoilBottom = coilSegments.first == segment
+            let isCoilTop = coilSegments.last == segment
+            
+            // A Segment between two internal breaks is still ambiguous; Wiring.FindLead refuses that geometry, and
+            // RemoveConnection never makes it (it falls back to the crossover's own location there).
+            return danglingNodes.first(where: { !(isCoilBottom && $0.belowSegment == nil) && !(isCoilTop && $0.aboveSegment == nil) }) ?? danglingNodes.first
+        }
+        
+        for nextNode in nodeStore {
             
             if nextNode.aboveSegment == segment {
                 

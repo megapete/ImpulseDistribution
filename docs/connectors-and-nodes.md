@@ -86,11 +86,12 @@ on each side. That is exactly what the segment-building loop makes at a tapping 
 leads back together is a bridged gap, tied up by the solver like any other. Both `TransformerView` and `SelfTest.ApplyRemoval` call
 it; `Wiring.RemoveJumper` (regulating-winding ties, never series connections) does not.
 
-**The one exception is a Segment whose far end also dangles** — the end of its coil, or a break already on its other side. `NodeAt`
-resolves a centre location to *the* dangling node of the Segment, and there would be two. There the lead goes on at the crossover's
-own upper/lower location instead, which `NodeAt` resolves unambiguously and which `IsTappingGap` still reads as a gap while it
-floats. (The same ambiguity exists for a design-file tapping gap on a Segment that has been folded to the end of its coil; that is
-older than this and is not addressed here.)
+**A centre location resolves to the Segment's dangling node, and a Segment can have two.** Folding every disc from a break to the
+end of the coil into one Segment (design-file gap or LTC cut alike) leaves it dangling at the coil end as well. `NodeAt` used to
+return whichever dangling node came first in the store — the coil's *bottom* node, for a folded lower half. It now discards the
+coil-end node, since a coil end is never a break. The one geometry that stays ambiguous is a Segment with a break at **both**
+ends; `Wiring.FindLead` refuses it, and `RemoveConnection` never makes it — there it puts the lead at the crossover's own
+upper/lower location instead, which `NodeAt` resolves unambiguously and which `IsTappingGap` still reads as a gap while it floats.
 
 `SelfTest`'s **`T0239-ltc-bridged`** and **`T0239-ltc-full`** are the check: T0239's 40-disc delta HV cut between discs 20 and 21,
 then tied straight back (tapping winding hanging off the lower lead) or with the whole 24-disc double-stacked tapping winding in
