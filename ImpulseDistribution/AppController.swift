@@ -854,14 +854,19 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
 
         inductanceIsValid = false
 
-        guard let fePhase = await CreateFePhase(xlFile: excelFile, model: model) else {
+        let fePhase:FePhase
+        do {
+
+            fePhase = try await CreateFePhase(xlFile: excelFile, model: model)
+        }
+        catch {
 
             // A superseded run reports nothing. Its caller has already changed the geometry out from under it, so a complaint here
             // is about a model that no longer exists and the newer run is the one that gets to have an opinion. Same reasoning at
             // the FE-section-count guard below, and on the error paths at the end.
             if !Task.isCancelled {
 
-                PCH_ErrorAlert(message: "Could not create finite element model!")
+                PCH_ErrorAlert(message: "Could not create finite element model!", info: error.localizedDescription)
             }
 
             return
@@ -1520,15 +1525,23 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         return result
     }
     
+    /// Why `CreateFePhase` could not pair the design file with the model. (A failure inside `FePhase` itself throws `FePhaseError`.)
+    struct FeModelMismatchError: LocalizedError {
+
+        let errorDescription: String?
+    }
+
     /// Function to create the finite-element model that we'll use to get the inductance matrix and eddy losses for the current PhaseModel. It is assumed that 'model' has already been updated (or created) using 'xlFile'.
-    func CreateFePhase(xlFile:PCH_ExcelDesignFile, model:PhaseModel) async -> FePhase? {
+    ///
+    /// It throws rather than returning nil so that the reason reaches the user's alert. It used to go only to `DLog`, which is
+    /// compiled out of Release, and so a design file with a zero tank depth said nothing but "Could not create finite element model!"
+    func CreateFePhase(xlFile:PCH_ExcelDesignFile, model:PhaseModel) async throws -> FePhase {
         
         let coilSegments = await model.CoilSegments()
         // do some simple checks to see if the xlFile and the model match, at least in terms of the number of coils and their basic sections
         guard let lastSegment = coilSegments.last, await lastSegment.radialPos == xlFile.windings.count - 1 else {
             
-            DLog("xlFile and model coil count do not match!")
-            return nil
+            throw FeModelMismatchError(errorDescription: "The design file and the model do not have the same number of coils.")
         }
         
         var totalBasicSections = 0
@@ -1558,8 +1571,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         
         guard totalFileSections == totalBasicSections else {
             
-            DLog("xlFile and model section count do not match!")
-            return nil
+            throw FeModelMismatchError(errorDescription: "The design file has \(totalFileSections) sections and the model has \(totalBasicSections).")
         }
         
         // The FE sections below are built one per Segment, in this array's order, and everything downstream addresses them by that
@@ -1589,17 +1601,9 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         let coreCenterToTank = await xlFile.tankDepth / 2.0
         let windowHt = await xlFile.core.windowHeight
         
-        do {
-            
-            return try await FePhase(coreRadius: xlFile.core.radius, windowHeight: windowHt, tankRadius: coreCenterToTank, frequency: xlFile.frequency, sections: feSections)
-        }
-        catch {
-            
-            // The caller raises the alert ("Could not create finite element model!"), and does so only when the run has not been
-            // superseded - which is the common way to get here. The specific reason goes to the log rather than to a second alert.
-            DLog("Could not create the FE model: \(error.localizedDescription)")
-            return nil
-        }
+        // The caller raises the alert ("Could not create finite element model!", with this error's text under it), and does so
+        // only when the run has not been superseded - which is the common way to get here.
+        return try await FePhase(coreRadius: xlFile.core.radius, windowHeight: windowHt, tankRadius: coreCenterToTank, frequency: xlFile.frequency, sections: feSections)
     }
     
     // MARK: Testing routines
@@ -3342,18 +3346,32 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             
             // create the current Transformer from the Excel design file
             let xlFile = try PCH_ExcelDesignFile(designFile: fileURL)
-            
-            // if we make it here, we have successfully opened the file, so save it as the "last successfully opened file"
-            UserDefaults.standard.set(fileURL, forKey: LAST_OPENED_INPUT_FILE_KEY)
-                
-            NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
-            
+
             Task {
+
+                // The file stores the tank as a depth, and everything here (the FE model, the tank shunt capacitance, the stress
+                // report's tank clearance) uses half of it as the core-centre-to-tank distance. A file whose tank does not clear its
+                // own outermost coil cannot be modelled, and TransformerDesignApp used to export every design with a depth of 0. Say
+                // so now, by name, rather than as "Could not create finite element model!" after the model has been built.
+                let fileTankDepth = await xlFile.tankDepth
+                let outermostRadius = await xlFile.windings.map({ $0.outerElectricalRadius }).max() ?? 0.0
+
+                guard fileTankDepth / 2.0 > outermostRadius else {
+
+                    PCH_ErrorAlert(message: "The design file's tank depth is too small!", info: String(format: "%@ gives a tank depth of %.1f mm, so the tank wall is %.1f mm from the core centre, but the outermost coil reaches %.1f mm. The tank depth is twice the core-centre-to-tank distance. Correct it in the file and open it again.", fileURL.lastPathComponent, fileTankDepth * 1000.0, fileTankDepth * 500.0, outermostRadius * 1000.0))
+                    return
+                }
+
+                // if we make it here, we have successfully opened the file, so save it as the "last successfully opened file"
+                UserDefaults.standard.set(fileURL, forKey: LAST_OPENED_INPUT_FILE_KEY)
+
+                NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
+
+                self.mainWindow.title = fileURL.lastPathComponent
+
                 await self.updateModel(oldSegments: [], newSegments: [], xlFile: xlFile, reinitialize: true, designFile: fileURL)
             }
-            
-            self.mainWindow.title = fileURL.lastPathComponent
-                        
+
             return true
         }
         catch

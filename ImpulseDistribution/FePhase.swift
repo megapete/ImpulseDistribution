@@ -77,6 +77,7 @@ actor FePhase {
         enum ErrorType: Sendable {
             case noSections
             case sectionOutsideWindow(String)
+            case sectionOutsideTank(String, sectionOuterRadius: Double, tankRadius: Double)
             case degenerateSection(String)
             case noInductanceMatrix
         }
@@ -90,6 +91,8 @@ actor FePhase {
                 return "The finite-element model has no coil sections."
             case .sectionOutsideWindow(let name):
                 return "Coil section '\(name)' does not fit inside the core window."
+            case .sectionOutsideTank(let name, let sectionOuterRadius, let tankRadius):
+                return String(format: "Coil section '%@' reaches %.1f mm from the core centre, but the tank wall is at %.1f mm. Check the tank depth in the design file (it is twice the core-centre-to-tank distance).", name, sectionOuterRadius * 1000.0, tankRadius * 1000.0)
             case .degenerateSection(let name):
                 return "Coil section '\(name)' has a zero (or negative) radial build or height."
             case .noInductanceMatrix:
@@ -156,8 +159,14 @@ actor FePhase {
                 throw FePhaseError(type: .degenerateSection(section.name))
             }
 
-            guard section.innerRadius >= coreRadius, section.outerRadius <= tankRadius,
-                  section.zMin >= 0.0, section.zMax <= windowHeight else {
+            // The tank wall gets its own message: it comes from a single field of the design file, and when that field is wrong
+            // (an exporter that writes 0) every section is outside it at once.
+            guard section.outerRadius <= tankRadius else {
+
+                throw FePhaseError(type: .sectionOutsideTank(section.name, sectionOuterRadius: section.outerRadius, tankRadius: tankRadius))
+            }
+
+            guard section.innerRadius >= coreRadius, section.zMin >= 0.0, section.zMax <= windowHeight else {
 
                 throw FePhaseError(type: .sectionOutsideWindow(section.name))
             }
