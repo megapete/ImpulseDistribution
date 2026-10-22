@@ -2353,9 +2353,11 @@ class TransformerView: NSView, NSViewToolTipOwner, NSMenuItemValidation {
                     
                     self.needsDisplay = true
                     
+                    // Not SetNodes alone: removing a series jumper adds a node and renumbers everything above it, and C is indexed
+                    // by node number. CalculateCapacitanceMatrix runs SetNodes itself and rebuilds C to match.
                     do {
-                        
-                        let _ = try await model.SetNodes()
+
+                        try await model.CalculateCapacitanceMatrix()
                     }
                     catch {
                         

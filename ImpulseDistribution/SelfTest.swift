@@ -1246,12 +1246,14 @@ enum SelfTest {
         // built during the restructure's recalculation, when the coil ends were still floating. That is fine for a scenario whose
         // connections are all coil ends - the nodes do not depend on what a coil end is tied to - but it is NOT fine in general,
         // because a jumper across a tapping gap and a ground on a centre lead both change what SetNodes decides. In the app the
-        // same rebuild is provoked by the next edit that touches the model at all.
+        // same rebuild is done by doCreateSimulationModel, which every run passes through.
         //
-        // This calls CalculateCapacitanceMatrix rather than AppController.recalculateModel deliberately: recalculateModel puts an
-        // NSAlert up when this throws, and a modal alert with nobody at the keyboard hangs the run forever. Here the throw is the
-        // result, and PhaseModelError.UnresolvableConnector - the guard at the end of SetNodes - is precisely the failure this
-        // scenario is built to provoke, so it has to arrive as text in a report and not as a dialog nobody will see.
+        // This is SetNodes ONLY, and must stay so. It used to be CalculateCapacitanceMatrix, which also rebuilt C - something the app
+        // did not do after a connection edit - so every scenario ran on a C the keyboard could never produce, and the LTC cut's
+        // stale C (69 square against 70 nodes on T0239) passed here while the app put 94.7 kV across the top HV disc. The C rebuild
+        // is now doCreateSimulationModel's, and the run reaches it the way the app does. SetNodes is called here, not left to that,
+        // because PhaseModelError.UnresolvableConnector - the guard at the end of SetNodes - is precisely the failure some
+        // scenarios are built to provoke, and it has to arrive as text in a report rather than as an alert.
         Stage("rebuilding the node topology with the connections in place")
 
         text += "NODE TOPOLOGY\n"
@@ -1259,7 +1261,7 @@ enum SelfTest {
 
         do {
 
-            try await model.CalculateCapacitanceMatrix()
+            _ = try await model.SetNodes()
             text += "  \(await model.nodes.count) nodes; every connector in the model resolves to one (PhaseModel.VerifyNodeTopology).\n\n"
         }
         catch {

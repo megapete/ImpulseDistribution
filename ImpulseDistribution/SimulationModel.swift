@@ -390,6 +390,14 @@ actor SimulationModel {
             return nil
         }
 
+        // C is indexed by node number, so a C built for a different numbering is not merely the wrong size: every row past the
+        // first renumbered node belongs to a different node, and the row surgery below silently skips what falls off the end.
+        guard await model.C!.rows == model.nodes.count else {
+
+            ALog("The capacitance matrix is \(await model.C!.rows) square but the model has \(await model.nodes.count) nodes - C was not rebuilt after the nodes were renumbered.")
+            return nil
+        }
+
         self.M = await model.M!
         self.unfactoredM = await model.unfactoredM!
 

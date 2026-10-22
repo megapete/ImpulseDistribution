@@ -1642,6 +1642,22 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         // Captured BEFORE the new model is built, because building it is what overwrites the PhaseModel's fixed C.
         let outgoing = SimulationState(simModel: self.currentSimModel, results: self.latestSimulationResult, fixedC: await phModel.fixedC)
 
+        // The node numbering and C are re-derived from the connections as they now stand, because an edit made at the keyboard can
+        // renumber the nodes without touching C. Removing the series jumper between two discs (the LTC cut) adds a node, which
+        // shifts every node above it up by one; C was still the matrix of the old numbering, one row short, and the Release build
+        // ran on it - the impulsed lead's row belonged to another coil, and on T0239 the top HV disc took 94.7 kV of a 95 kV crest
+        // at t = 0+. A connection edit is not the only thing that can do this (a jumper across a tapping gap or a ground on a
+        // centre lead changes what SetNodes decides too), so it is redone here, where every run passes, rather than after each edit.
+        do {
+
+            try await phModel.CalculateCapacitanceMatrix()
+        }
+        catch {
+
+            PCH_ErrorAlert(message: "Could not create simulation model!", info: "The capacitance matrix could not be rebuilt for the current connections: \(error)")
+            return nil
+        }
+
         guard let newModel = await SimulationModel(model: phModel) else {
 
             // Leave the existing model, results and undo slot alone. A failed rebuild is a refusal, not a reset - there is no
