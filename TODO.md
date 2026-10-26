@@ -93,6 +93,16 @@ adjacent coils and distributes the total inter-coil capacitance between them. En
 book gives a procedure for this. It does conserve the total by construction. **Parked deliberately**: PCH
 wants to discuss the approach before anything is changed here.
 
+#### 6a. A quarter of the LV–HV capacitance goes missing on S0747 — found 2026-10-26, not yet investigated
+
+On `S0747` (no radial shield) the HV books **2.123e-10 F** to the LV and the LV books the same back, but
+`CoilInnerShuntCapacitance(coil: 1)` gives **2.831e-10 F** for that pair, recomputed by hand from the same formula. That is
+75% of the total, which contradicts "conserves the total by construction" above. The same formula reproduces the shield-to-HV
+value exactly (3.336e-10 F, `S0747-shield`), so the shortfall is in how the total is shared out, not in the total itself.
+The likely place is the `capLink` loop, or the `referenceHt`/`referenceZero` bookkeeping in front of it. The LV here is a
+**sheet**, so it has only two nodes against the HV's 77, which is the most mismatched pairing the loop can be given. First
+step: sum the capLinks for each coil pair on every fixture and compare each sum against `CoilInnerShuntCapacitance`.
+
 ## Dielectric stress screen
 
 Added 2026-08-05 (`DielectricStress.swift`, `TurnLadderModel.swift`). See `docs/dielectric-stress.md` for the method and its
