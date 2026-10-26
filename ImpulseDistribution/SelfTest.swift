@@ -418,14 +418,17 @@ enum SelfTest {
         "S0747" : S0747(name: "S0747", shieldGap: nil)
     ]
 
-    /// The S0747 fixture: a 12-turn LV sheet (coil 0), a 76-disc HV (coil 1) and a 32-disc RV (coil 2), wired with no taps in
-    /// circuit - the HV's centre crossover left in place and carried to the RV's centre crossover - and, optionally, a radial ground
-    /// shield added inside the HV last, the way it was when the simulation crashed (reported 2026-10-26).
+    /// The S0747 fixture: a 12-turn LV sheet (coil 0), a 76-disc delta HV (coil 1) with a 3" physical gap at its centre, and a
+    /// 32-disc double-stacked regulating winding (coil 2) of 8 loops, wired the way the unit is tested with NO TAPS IN CIRCUIT.
+    ///
+    /// The HV's two centre discs stay in series across its gap (the crossover above disc 38 is left alone), and the tap changer sits
+    /// at that crossover. The RV is DECLARED a regulating winding, so `RegulatingWinding.Apply` parallels its two halves - including
+    /// tying its two centre leads together across its own gap - and those centre leads go to the HV's centre crossover, as they do
+    /// at the tap changer on the real unit. `-shield` then adds a radial ground shield 150 mm in from the HV's ID, last, the way it
+    /// was when the simulation crashed (reported 2026-10-26).
     private static func S0747(name:String, shieldGap:Double?) -> Scenario {
 
-        // Neither coil has a tapping gap in the model - the HV's 76 mm centre gap is series-connected - so each centre is the
-        // crossover between its two middle discs: 38/39 on the HV, 16/17 on the RV.
-        var edits:[Edit] = [.jumper(Jumper(from: .discCrossover(coil: 1, disc: 38), to: .gapLead(coil: 2, gap: 0, side: .bottom)))]
+        var edits:[Edit] = []
 
         if let gap = shieldGap {
 
@@ -436,8 +439,10 @@ enum SelfTest {
                         restructure: .none,
                         matchedBuild: nil,
                         fixtureName: "S0747_AndIn.txt",
-                        notes: "LV grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded, HV centre crossover tied to the RV centre crossover." + (shieldGap == nil ? "" : " Radial ground shield inside the HV."),
-                        jumpers: [],
+                        notes: "LV grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded. RV declared an 8-loop regulating winding (halves paralleled), its centre leads tied to the HV centre crossover: no taps in circuit." + (shieldGap == nil ? "" : " Radial ground shield 150 mm inside the HV."),
+                        // The declaration has already tied the RV's two centre leads to each other, so one jumper carries both.
+                        jumpers: [Jumper(from: .gapLead(coil: 2, gap: 0, side: .bottom), to: .discCrossover(coil: 1, disc: 38))],
+                        regulatingWindings: [RegulatingWinding(coil: 2, numLoops: 8)],
                         terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
                                        Termination(point: .coilEnd(coil: 0, end: .top), type: .ground),
                                        Termination(point: .coilEnd(coil: 1, end: .bottom), type: .ground),

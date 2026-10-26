@@ -343,9 +343,11 @@ for `PhaseModel.RemoveConnection`; see "Cutting a winding for an LTC" in `docs/c
 
 ## `S0747` / `S0747-shield`: a radial ground shield
 
-`S0747_AndIn.txt` (from the STME-0747 job folder) is a 12-turn LV sheet, a 76-disc HV and a 32-disc RV with a tapping gap at its
-centre. Both scenarios ground the LV, put 550 kV full wave on the HV top, ground the HV bottom, and tie the HV's centre crossover
-(discs 38/39, left in series) to the lower lead of the RV's centre gap: no taps in circuit. `-shield` then adds a radial shield
-150 mm in from the HV's ID with the `.radialShield` edit, a port of `doAddRadialShield`, as the last thing before the simulation is
-built. This is the first scenario with a radial shield in it, and until 2026-10-26 it trapped in `PhaseModel.EffectiveHeight`; see
-`docs/segments-and-geometry.md`.
+`S0747_AndIn.txt` (from the STME-0747 job folder) is a 12-turn LV sheet, a 76-disc delta HV with a 3" physical gap at its centre,
+and a 32-disc double-stacked regulating winding of 8 loops. Both scenarios are the impulse test with **no taps in circuit**: LV
+grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded. The HV's two centre discs stay in series across the gap,
+the RV is **declared** a regulating winding (its two halves paralleled, centre leads tied across its own gap), and those centre
+leads go to the HV's centre crossover, discs 38/39, which is where the tap changer ties them on the real unit. The `Connectivity:`
+line should show `40<-95,96`. `-shield` then adds a radial shield 150 mm in from the HV's ID with the `.radialShield` edit, a port
+of `doAddRadialShield`, as the last thing before the simulation is built. This is the first scenario with a radial shield in it,
+and until 2026-10-26 it trapped in `PhaseModel.EffectiveHeight`; see `docs/segments-and-geometry.md`.
