@@ -125,6 +125,50 @@ step: sum the capLinks for each coil pair on every fixture and compare each sum 
 A fix would book coupling only where the two coils' conductors actually face each other, plus some fringing at the
 ends and gap edges. That is item 6's algorithm, which is parked for discussion.
 
+#### 6b. How much it matters, and a proposed replacement — measured 2026-10-26
+
+**The one-off run.** This was temporary code, now removed. Just before C was assembled, it took out all the HV–RV coupling and
+re-booked it RV disc by RV disc, each in proportion to its height. Each RV disc's share was split over the HV discs it overlaps
+axially, a quarter to each end-node pair, with no fringing. It ran on the S0747 wiring in two variants: the same total as now
+(6.687e-10 F), and a total from the RV's own effective height (0.310 m instead of the 0.623 m average, 3.59e-10 F).
+
+| | now | overlap, same total | overlap, RV-height total |
+|---|---|---|---|
+| `S0747-shield` line-end gradient | 7.02× | 7.03× | 6.65× |
+| `S0747-shield` worst section | 35.8 kV | 36.1 kV | 34.1 kV |
+| `S0747` line-end gradient | 5.62× | 5.73× | 5.27× |
+| `S0747` worst section | 28.8 kV | 29.5 kV | 27.1 kV |
+| HV node 55, about 2/3 up (shield) | 0.335 p.u. | 0.275 | 0.303 |
+| HV centre, node 40 (shield) | 0.173 | 0.166 | 0.157 |
+| RV outer ends (shield) | 0.277 | 0.215 | 0.193 |
+
+Peak is 1.002 p.u. in every case. **At the line end, the placement barely matters and the total matters by about 5%. In the
+middle of the coil and on the RV itself, the shifts are up to about 0.07 p.u. (about 35 kV at 550 kV)**, which matters for any
+HV-to-RV or along-the-RV stress check.
+
+**Why the average height overstates this pair.** `CapacitiveHeightInner` averages the two effective heights. That is fine for
+coils of similar height. Here it credits (0.936 − 0.310)/2 = 0.31 m of fringing, about 78 mm (one full hilo) at each of the
+RV's four free edges: top, bottom and both faces of its 406 mm centre gap. PCH believes the averaging rule is from DelVecchio;
+find the page and see what case it was written for.
+
+**Proposed fringing estimate.** In the slot between two coils, the field from a disc beyond the end of the opposite
+electrode decays roughly as exp(−π·d/g). Here d is the axial distance past the edge and g is the radial gap. This is a
+textbook two-dimensional slot result and should be treated as an engineering estimate. Integrated, it is equivalent to
+extending the facing height by **g/π per free edge**: 24.5 mm here, so H ≈ 0.310 + 4 × 0.0245 ≈ **0.41 m**. The same weight
+answers "close but not too close": an HV disc 12 mm past an RV edge gets 60% of a facing disc's coupling, 25 mm gets 36%,
+50 mm gets 13%, and 77 mm (one hilo) gets 4%. So only 2–4 discs past each edge matter. Today every HV disc out to about 400 mm
+away gets the full rate, piled onto the RV's nearest node. The estimate ignores the RV's end faces (82 mm of radial build)
+and the HV's other paths to the tank.
+
+**Proposed next steps, in order (item 6 is parked, so PCH to approve the first):**
+
+1. Replace the `capLink` matching with **overlap-plus-decay booking**: for each pair of discs, book coupling where they face
+   each other, weighted by exp(−πd/g) beyond each edge. Conserve the pair's total, and derive that total from the same
+   weighted height rather than the average. That should also cure 6a's lost quarter.
+2. Settle the fringing with an **electrostatic FE solve** of S0747 as the reference. `PchAxiSymFE` already carries an
+   `ElectrostaticFormulation`, marked "phase two". It would give the whole disc-to-disc shunt matrix directly, fringing
+   included, and it is the calibration for the g/π allowance.
+
 ## Dielectric stress screen
 
 Added 2026-08-05 (`DielectricStress.swift`, `TurnLadderModel.swift`). See `docs/dielectric-stress.md` for the method and its
