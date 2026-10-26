@@ -1324,6 +1324,10 @@ enum SelfTest {
             return Report(text: text + "FAILED: the simulation model could not be created.\n", summary: "FAILED - no simulation model")
         }
 
+        // After doCreateSimulationModel, because that is where C is rebuilt with the post-wiring edits (a radial shield, on
+        // S0747-shield) in place - see the note above SetNodes.
+        text += await ShuntBookingReport(model: model)
+
         Stage("solving the initial distribution")
 
         guard let snapshot = await simModel.Snapshot() else {
@@ -2396,6 +2400,97 @@ enum SelfTest {
     ///
     /// An interior unit is chosen deliberately: the two end units of a coil get the end-disc treatment (DV 12.63-64) and are
     /// several times smaller, so they say nothing about the bulk of the winding.
+    /// Which shunt booking built C, and what it booked: per coil pair and per coil to ground, the total and the single node that
+    /// carries the largest share of it, with the analytic totals they came from beside them.
+    ///
+    /// The totals are TODO item 6a's first check (does the booking conserve what the formulas give?) and the largest share is 6b's
+    /// symptom (a gap in one coil piling its neighbour's coupling onto the gap's edge nodes). Both are printed for either booking,
+    /// so that two runs of the same scenario with and without `-PCH_ShuntBooking overlap` can be put side by side.
+    private static func ShuntBookingReport(model:PhaseModel) async -> String {
+
+        var text = "SHUNT BOOKING: \(PhaseModel.shuntBooking.rawValue)\n"
+
+        let nodes = await model.nodes
+
+        var coilOfNode:[Int:Int] = [:]
+
+        for nextNode in nodes {
+
+            if let radial = nextNode.aboveSegment?.radialPos ?? nextNode.belowSegment?.radialPos {
+
+                coilOfNode[nextNode.number] = radial
+            }
+        }
+
+        // (coil, other coil or -1 for ground) -> the total, and the per-node totals on `coil`'s side
+        struct Key: Hashable { let coil:Int; let other:Int }
+        var total:[Key:Double] = [:]
+        var perNode:[Key:[Int:Double]] = [:]
+
+        for nextNode in nodes {
+
+            guard let coil = coilOfNode[nextNode.number] else {
+
+                continue
+            }
+
+            for nextCap in nextNode.shuntCapacitances {
+
+                let other = nextCap.toNode < 0 ? -1 : (coilOfNode[nextCap.toNode] ?? -1)
+
+                guard other != coil else {
+
+                    continue
+                }
+
+                let key = Key(coil: coil, other: other)
+                total[key, default: 0.0] += nextCap.capacitance
+                perNode[key, default: [:]][nextNode.number, default: 0.0] += nextCap.capacitance
+            }
+        }
+
+        for key in total.keys.sorted(by: { ($0.coil, $0.other) < ($1.coil, $1.other) }) {
+
+            let sum = total[key]!
+            let otherName = key.other < 0 ? "ground " : "coil \(key.other)"
+            text += "  coil \(key.coil) to \(otherName): \(Farads(sum))"
+
+            if let largest = perNode[key]?.max(by: { $0.value < $1.value }), sum > 0.0 {
+
+                text += String(format: "   largest share: node %d, %.4e F (%.1f%% over %d nodes)\n", largest.key, largest.value, 100.0 * largest.value / sum, perNode[key]!.count)
+            }
+            else {
+
+                text += "\n"
+            }
+        }
+
+        text += "  analytic totals:\n"
+
+        let coils = Array(Set(await model.CoilSegments().map({ $0.radialPos }))).sorted()
+
+        for coil in coils {
+
+            if let inner = try? await model.CoilInnerShuntCapacitance(coil: coil), let height = try? await model.CapacitiveHeightInner(coil: coil) {
+
+                let innerName = (try? await model.RadialShieldInside(coil: coil)) != nil ? "its inner radial shield" : (coil == 0 ? "the core" : "coil \(coil - 1)")
+                text += "    CoilInnerShuntCapacitance(coil: \(coil)), to \(innerName): \(Farads(inner)) at H = \(Millimetres(height))\n"
+            }
+
+            if let shield = try? await model.RadialShieldOutside(coil: coil), let shieldC = try? await model.CoilInnerShuntCapacitance(coil: shield.radialPos) {
+
+                text += "    CoilInnerShuntCapacitance(coil: \(shield.radialPos)), coil \(coil) to the radial shield outside it: \(Farads(shieldC))\n"
+            }
+        }
+
+        if let outer = try? await model.OuterShuntCapacitance() {
+
+            text += "    OuterShuntCapacitance: tank \(Farads(outer.tank)), adjacent phase \(Farads(outer.adjacentPhase))\n"
+        }
+
+        return text + "\n"
+    }
+
     private static func CapacitanceBreakdown(model:PhaseModel, coil:Int) async -> String {
 
         var text = "SERIES CAPACITANCE OF ONE INTERIOR UNIT, coil \(coil)\n"

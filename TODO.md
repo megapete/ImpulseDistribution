@@ -169,6 +169,57 @@ and the HV's other paths to the tank.
    `ElectrostaticFormulation`, marked "phase two". It would give the whole disc-to-disc shunt matrix directly, fringing
    included, and it is the calibration for the g/π allowance.
 
+#### 6c. Overlap-plus-decay booking — implemented behind a switch, 2026-10-26
+
+Step 1 of 6b is in, as `PhaseModel.BookShuntCapacitancesByOverlap` (the rule and its integration are documented on
+`OverlapDecayCoupling`). **It is off by default.** `-PCH_ShuntBooking overlap` on the command line selects it; anything else,
+or nothing, runs the original `capLink` booking, which is unchanged and has been moved into `BookShuntCapacitancesByCapLink`.
+The SelfTest report now has a `SHUNT BOOKING` section that prints, for either method, the booked total for each coil pair and
+for each coil to ground, the single node that carries the largest share, and the analytic totals beside them.
+
+The rule: at each z the coupling is `c′·exp(−π(d_A + d_B)/g)·dz`, booked to the nearest Segment on each side. Here
+`c′ = C(H)/H` comes from the existing formulas and g is the radial gap. The core, a radial shield, the tank and the adjacent
+phase are grounded electrodes; the core, tank and phase run the full window height. The tank and the adjacent phase are two
+separate walks, because their gaps differ by a factor of eight on S0747.
+
+**The checks it passes.** LV to core grows by exactly 2·(g/π)(1 − e^(−π·61/g)) = 12.1 mm for g = 19.05 mm: the core runs on
+61 mm past each end of the LV. HV–RV comes out at 0.400 m of effective height, against 0.41 m estimated in 6b. Every coil pair
+books the same total from both sides, and `S0747-shield` under `capLink` reproduces 6b's "now" column exactly.
+
+| | S0747 capLink | S0747 overlap | -shield capLink | -shield overlap |
+|---|---|---|---|---|
+| LV–HV (or shield–HV) | 2.123e-10 | 3.025e-10 | 3.336e-10 | 3.671e-10 |
+| HV–RV | 6.687e-10 | 4.636e-10 | 6.687e-10 | 4.636e-10 |
+| RV to ground (tank + phase) | 1.337e-10 | 2.083e-10 | 1.337e-10 | 2.083e-10 |
+| largest RV node's share of HV–RV | 22.3% (node 95) | 5.2% | 22.3% | 5.2% |
+| line-end gradient | 5.62× | **7.02×** | 7.02× | 7.42× |
+| worst section | 28.8 kV | 35.8 kV | 35.8 kV | 37.8 kV |
+| HV node 55 / centre node 40 | 0.416 / 0.230 | 0.295 / 0.161 | 0.335 / 0.172 | 0.275 / 0.147 |
+| RV outer ends (79, 112) | 0.321 | 0.176 | 0.277 | 0.165 |
+
+**What it shows:**
+
+- **6a was worse than a lost quarter.** `capLink` put 34% of the LV–HV coupling on HV node 78, which is the line terminal. A
+  capacitance on a driven node does nothing to the distribution, so the HV effectively had about half its LV coupling.
+  Booked properly, the unshielded S0747 line-end gradient rises from 5.62× to 7.02×, the same as the shielded variant. That
+  is what physics says it should be, since the LV is grounded at both ends and acts as a shield. **The current S0747 numbers
+  understate the line-end stress by about 20%.**
+- **The pile-up on the RV centre leads is gone.** The largest single node falls from 22% to 5% of the HV–RV coupling. Mid-coil
+  and RV potentials drop by 0.06–0.15 p.u.
+- **The shield–HV term rises 10%.** That is the HV's 76 mm gap, now about two-thirds counted with g = 150 mm, plus about g/2π
+  at each aligned end. The aligned-end term is the weakest part of the rule and FE should check it.
+- **The tank term is where the slot model is least defensible.** g = 467 mm makes g/π = 149 mm, which is comparable to the
+  RV's 213 mm clearance to the yoke and larger than half its 406 mm centre gap. This is the main reason the RV's ground C rises
+  56%. The phase-to-phase walk (g = 57 mm) is on firmer ground. The FE run should settle both.
+
+**Found on the way, not fixed:** `CoilInnerShuntCapacitance` for a radial shield (negative `coil`) takes its `prevIR` from
+`SegmentAt(radial: -coil)`. For a shield, that finds the coil **outside** the shield, not the one inside it. On `S0747-shield`
+that makes rGap 537 mm instead of 222 mm, so the LV-to-shield capacitance, 3.065e-9 F, is about 2.4× too high. Both bookings
+use it, and on S0747 the LV is grounded at both ends so it does not reach the HV, but it is wrong.
+
+**Next:** PCH to review the 6c numbers, then decide whether `overlap` becomes the default. Step 2 (the electrostatic FE) is
+the calibration for g, particularly for the tank and for the aligned-end term.
+
 ## Dielectric stress screen
 
 Added 2026-08-05 (`DielectricStress.swift`, `TurnLadderModel.swift`). See `docs/dielectric-stress.md` for the method and its

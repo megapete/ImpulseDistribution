@@ -2106,244 +2106,11 @@ actor PhaseModel /*:Codable */ {
             
             // let floatingNodes = self.NodesOfType(connType: .floating)
             
-            // Init some local vars
-            var innerFirstNode = 0
-            var outerFirstNode = 0
-            var innerCoilHt = 0.0
-            var referenceZero = await self.nodeStore[0].aboveSegment!.z1
-            
-            // For each coil ('i' is the index of the "outer" coil)
-            for i in 0..<coilTopNodes.count {
-                
-                // we need to find the first (ie: lowest) and last (highest) node for the outermost coil. Note that for coil '0' (the innermost coil), the core is considered to be the 'inner' coil
-                outerFirstNode = i == 0 ? 0 : coilTopNodes[i - 1] + 1
-                let outerLastNode = coilTopNodes[i]
-                
-                // get the overall height of the outer coil
-                let outerCoilHt = await self.nodeStore[outerLastNode].belowSegment!.z2 - self.nodeStore[outerFirstNode].aboveSegment!.z1
-                // fix the reference '0' for the coil pair (set it to the lesser of the two)
-                referenceZero = await min(referenceZero, self.nodeStore[outerFirstNode].aboveSegment!.z1)
-                
-                ZAssert(outerCoilHt > 0.0, message: "Got negative height!")
-                
-                // Get the shunt capacitance between the 'i-th' coil and the i-1 coil
-                let totalCapacitance = try await CoilInnerShuntCapacitance(coil: i)
-                
-                ZAssert(totalCapacitance > 0.0, message: "Got negative total capacitance")
-                
-                // choose the higher of the two heights as the reference to use
-                let referenceHt = max(innerCoilHt, outerCoilHt)
-                
-                // come up with a rate of change for the capacitance
-                let faradsPerMeter = totalCapacitance / referenceHt
-                
-                struct nodeCap {
-                    
-                    let nodeIndex:Int
-                    let z:Double
-                    let cap:Double
-                }
-                
-                let currentCoil = self.nodeStore[outerFirstNode].aboveSegment!.radialPos
-                let hasShieldInside = try await self.RadialShieldInside(coil: currentCoil) != nil
-                var innerNodeCaps:[nodeCap] = []
-                
-                // What we do next depends if this is the innermost coil, or if there is a ground shield inside the coil
-                if i == 0 || hasShieldInside {
-                    
-                    // take care of the special case where it's the first coil (ie: the 'inner coil' is actually the core)
-                    innerNodeCaps = [nodeCap(nodeIndex: -1, z: 0.0, cap: totalCapacitance / 2.0), nodeCap(nodeIndex: -1, z: referenceHt, cap: totalCapacitance / 2.0)]
-                }
-                else {
-                    
-                    let innerLastNode = coilTopNodes[i - 1]
-                    innerCoilHt = self.nodeStore[innerLastNode].z - self.nodeStore[innerFirstNode].z
-                    
-                    for j in innerFirstNode...innerLastNode {
-                        
-                        let lastCcum = j == innerFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * faradsPerMeter
-                        let nextCcum = j == innerLastNode ? totalCapacitance : (self.nodeStore[j + 1].z - referenceZero) * faradsPerMeter
-                        
-                        let nextNodeCap = nodeCap(nodeIndex: j, z: self.nodeStore[j].z, cap: (nextCcum - lastCcum) / 2.0)
-                        innerNodeCaps.append(nextNodeCap)
-                    }
-                }
-                
-                // At this point, the (inner -> outer) shunt capacitances are calculated; now calculate the (outer -> inner) capacitances
-                
-                var outerNodeCaps:[nodeCap] = []
-                
-                for j in outerFirstNode...outerLastNode {
-                    
-                    let lastCcum = j == outerFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * faradsPerMeter
-                    let nextCcum = j == outerLastNode ? totalCapacitance : (self.nodeStore[j + 1].z - referenceZero) * faradsPerMeter
-                    
-                    let nextNodeCap = nodeCap(nodeIndex: j, z: self.nodeStore[j].z, cap: (nextCcum - lastCcum) / 2.0)
-                    outerNodeCaps.append(nextNodeCap)
-                }
-                
-                // At this point, the two sets of node capacitances are set up. Take care of the trivial cases first, where the shunt capacitances from the innermost coil are to the core or a radial shield (a ground plane).
-                if i == 0 || hasShieldInside {
-                    
-                    for nextNodeCap in outerNodeCaps {
-                        
-                        self.nodeStore[nextNodeCap.nodeIndex].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: nextNodeCap.cap))
-                    }
-                }
-                else {
-                    
-                    // Apply the Super Duper Shunt Capacitance Algorithm™ by PCH
-                    
-                    struct capLink {
-                        
-                        let innerNode:Int
-                        let outerNode:Int
-                        let aveCap:Double
-                    }
-                    
-                    // set the indices into the various arrays
-                    let inner = 0
-                    let outer = 1
-                    
-                    // initialize arrays & variables
-                    let nodeCaps = [innerNodeCaps, outerNodeCaps]
-                    var currentNodeIndex = [0, 0]
-                    var cumCap = [innerNodeCaps[0].cap, outerNodeCaps[0].cap]
-                    // set the reference coil as the one whose first node has the lower capacitance (ie: the most nodes - I think)
-                    var refCoil = nodeCaps[inner][0].cap <= nodeCaps[outer][0].cap ? inner : outer
-                    var otherCoil = refCoil == inner ? outer : inner
-                    var capLinks:[capLink] = []
-                    var prevAverageC = 0.0
-                    
-                    while currentNodeIndex[inner] < nodeCaps[inner].count && currentNodeIndex[outer] < nodeCaps[outer].count {
-                    
-                        // This is where weird things like large axial gaps in tapping windings are (should) be taken care of
-                        let thisAverageZ = (nodeCaps[inner][currentNodeIndex[inner]].z + nodeCaps[outer][currentNodeIndex[outer]].z) / 2.0
-                        let thisAverageC = (thisAverageZ - referenceZero) / referenceHt * totalCapacitance
-                        
-                        let innerNode = nodeCaps[inner][currentNodeIndex[inner]].nodeIndex
-                        let outerNode = nodeCaps[outer][currentNodeIndex[outer]].nodeIndex
-                        
-                        // capLinks.append(capLink(innerNode: nodeCaps[inner][currentNodeIndex[inner]].nodeIndex, outerNode: nodeCaps[outer][currentNodeIndex[outer]].nodeIndex, aveCap: averageC))
-                         
-                        let refValue = nodeCaps[refCoil][currentNodeIndex[refCoil]].cap / 2.0
-                        
-                        if abs(cumCap[inner] - cumCap[outer]) > refValue {
-                                
-                            currentNodeIndex[refCoil] += 1
-                            
-                            if currentNodeIndex[refCoil] >= nodeCaps[refCoil].count {
-                                
-                                break
-                            }
-                            
-                            cumCap[refCoil] += nodeCaps[refCoil][currentNodeIndex[refCoil]].cap
-                        }
-                        else {
-                            
-                            currentNodeIndex[refCoil] += 1
-                            currentNodeIndex[otherCoil] += 1
-                            
-                            if currentNodeIndex[inner] >= nodeCaps[inner].count && currentNodeIndex[outer] >= nodeCaps[outer].count {
-                                
-                                break
-                            }
-                            
-                            if currentNodeIndex[refCoil] < nodeCaps[refCoil].count {
-                                
-                                cumCap[refCoil] += nodeCaps[refCoil][currentNodeIndex[refCoil]].cap
-                            }
-                            else {
-                                
-                                currentNodeIndex[refCoil] = nodeCaps[refCoil].count - 1
-                            }
-                            
-                            if currentNodeIndex[otherCoil] < nodeCaps[otherCoil].count {
-                                
-                                cumCap[otherCoil] += nodeCaps[otherCoil][currentNodeIndex[otherCoil]].cap
-                            }
-                            else {
-                                
-                                currentNodeIndex[otherCoil] = nodeCaps[otherCoil].count - 1
-                            }
-                        }
-                        
-                        let nextAverageZ = (nodeCaps[inner][currentNodeIndex[inner]].z + nodeCaps[outer][currentNodeIndex[outer]].z) / 2.0
-                        let nextAverageC = (nextAverageZ - referenceZero) / referenceHt * totalCapacitance
-                        
-                        let averageC = (nextAverageC - prevAverageC) / 2
-                        
-                        prevAverageC = thisAverageC
-                        
-                        capLinks.append(capLink(innerNode: innerNode, outerNode: outerNode, aveCap: averageC))
-                        
-                        refCoil = nodeCaps[inner][currentNodeIndex[inner]].cap <= nodeCaps[outer][currentNodeIndex[outer]].cap ? inner : outer
-                        otherCoil = refCoil == inner ? outer : inner
-                    }
-                    
-                    // add the final shunt capacitance
-                    capLinks.append(capLink(innerNode: nodeCaps[inner].last!.nodeIndex, outerNode: nodeCaps[outer].last!.nodeIndex, aveCap: (totalCapacitance - prevAverageC) / 2))
-                    
-                    // convert the capLinks to shunt capacitances
-                    for j in 0..<capLinks.count {
-                        
-                        // let lowIndex = max(0, j - 1)
-                        // let hiIndex = min(capLinks.count - 1, j + 1)
-                        // let shuntCap = (capLinks[hiIndex].aveCap - capLinks[lowIndex].aveCap) / 2.0
-                        
-                        let shuntCap = capLinks[j].aveCap
-                        self.nodeStore[capLinks[j].innerNode].shuntCapacitances.append(Node.shuntCap(toNode: capLinks[j].outerNode, capacitance: shuntCap))
-                        self.nodeStore[capLinks[j].outerNode].shuntCapacitances.append(Node.shuntCap(toNode: capLinks[j].innerNode, capacitance: shuntCap))
-                    }
-                }
-                
-                // We now need to check if there is a radial shield OUTSIDE the coil
-                if let radialShieldOutside = try await self.RadialShieldOutside(coil: currentCoil) {
-                    
-                    let rsCoil = radialShieldOutside.radialPos
-                    let rsCapacitance = try await self.CoilInnerShuntCapacitance(coil: rsCoil)
-                    
-                    let coilLastNode = outerLastNode
-                    let coilFirstNode = outerFirstNode
-                    
-                    let rsFaradsPerMeter = rsCapacitance / referenceHt
-                    
-                    var rsNodeCaps:[nodeCap] = []
-                    for j in coilFirstNode...coilLastNode {
-                        
-                        let lastCcum = j == coilFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * rsFaradsPerMeter
-                        let nextCcum = j == coilLastNode ? rsCapacitance : (self.nodeStore[j + 1].z - referenceZero) * rsFaradsPerMeter
-                        
-                        let nextNodeCap = nodeCap(nodeIndex: j, z: self.nodeStore[j].z, cap: (nextCcum - lastCcum) / 2.0)
-                        rsNodeCaps.append(nextNodeCap)
-                    }
-                    
-                    for nextNodeCap in rsNodeCaps {
-                        
-                        self.nodeStore[nextNodeCap.nodeIndex].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: nextNodeCap.cap))
-                    }
-                }
-                
-                // set some variables for the next time through the loop
-                innerCoilHt = outerCoilHt
-                innerFirstNode = outerFirstNode
-                
-            }
-            
-            // Add the shunt capacitances to ground for the outermost coil. The tank and the adjacent phase are both ground here -
-            // see OuterShuntCapacitance for what that assumes - so they are distributed as a single figure.
-            let outerTerms = try await OuterShuntCapacitance()
-            let outerCapacitance = outerTerms.tank + outerTerms.adjacentPhase
-            let referenceHt = self.nodeStore[coilTopNodes.last!].z - self.nodeStore[innerFirstNode].z
-            referenceZero = self.nodeStore[innerFirstNode].z
-            let faradsPerMeter = outerCapacitance / referenceHt
-            
-            for j in innerFirstNode...coilTopNodes.last! {
-                
-                let lastCcum = j == innerFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * faradsPerMeter
-                let nextCcum = j == coilTopNodes.last! ? outerCapacitance : (self.nodeStore[j + 1].z - referenceZero) * faradsPerMeter
-                
-                self.nodeStore[j].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: (nextCcum - lastCcum) / 2.0))
+            switch PhaseModel.shuntBooking {
+            case .capLink:
+                try await BookShuntCapacitancesByCapLink(coilTopNodes: coilTopNodes)
+            case .overlap:
+                try await BookShuntCapacitancesByOverlap()
             }
             
             // At this point, all of the series and shunt capacitances have been calculated, so we can create the C-matrix. Note that at this point, the matrix has not taken into consideration any cross connections, nodal connections to ground, etc.
@@ -2404,6 +2171,597 @@ actor PhaseModel /*:Codable */ {
         }
     }
     
+    /// The original shunt booking: the Super Duper Shunt Capacitance Algorithm™ for coil pairs, and a uniform per-metre spread for
+    /// everything booked to ground. Kept, unchanged, as one side of the `ShuntBooking` switch - see TODO item 6.
+    private func BookShuntCapacitancesByCapLink(coilTopNodes:[Int]) async throws {
+        
+        // Init some local vars
+        var innerFirstNode = 0
+        var outerFirstNode = 0
+        var innerCoilHt = 0.0
+        var referenceZero = await self.nodeStore[0].aboveSegment!.z1
+        
+        // For each coil ('i' is the index of the "outer" coil)
+        for i in 0..<coilTopNodes.count {
+            
+            // we need to find the first (ie: lowest) and last (highest) node for the outermost coil. Note that for coil '0' (the innermost coil), the core is considered to be the 'inner' coil
+            outerFirstNode = i == 0 ? 0 : coilTopNodes[i - 1] + 1
+            let outerLastNode = coilTopNodes[i]
+            
+            // get the overall height of the outer coil
+            let outerCoilHt = await self.nodeStore[outerLastNode].belowSegment!.z2 - self.nodeStore[outerFirstNode].aboveSegment!.z1
+            // fix the reference '0' for the coil pair (set it to the lesser of the two)
+            referenceZero = await min(referenceZero, self.nodeStore[outerFirstNode].aboveSegment!.z1)
+            
+            ZAssert(outerCoilHt > 0.0, message: "Got negative height!")
+            
+            // Get the shunt capacitance between the 'i-th' coil and the i-1 coil
+            let totalCapacitance = try await CoilInnerShuntCapacitance(coil: i)
+            
+            ZAssert(totalCapacitance > 0.0, message: "Got negative total capacitance")
+            
+            // choose the higher of the two heights as the reference to use
+            let referenceHt = max(innerCoilHt, outerCoilHt)
+            
+            // come up with a rate of change for the capacitance
+            let faradsPerMeter = totalCapacitance / referenceHt
+            
+            struct nodeCap {
+                
+                let nodeIndex:Int
+                let z:Double
+                let cap:Double
+            }
+            
+            let currentCoil = self.nodeStore[outerFirstNode].aboveSegment!.radialPos
+            let hasShieldInside = try await self.RadialShieldInside(coil: currentCoil) != nil
+            var innerNodeCaps:[nodeCap] = []
+            
+            // What we do next depends if this is the innermost coil, or if there is a ground shield inside the coil
+            if i == 0 || hasShieldInside {
+                
+                // take care of the special case where it's the first coil (ie: the 'inner coil' is actually the core)
+                innerNodeCaps = [nodeCap(nodeIndex: -1, z: 0.0, cap: totalCapacitance / 2.0), nodeCap(nodeIndex: -1, z: referenceHt, cap: totalCapacitance / 2.0)]
+            }
+            else {
+                
+                let innerLastNode = coilTopNodes[i - 1]
+                innerCoilHt = self.nodeStore[innerLastNode].z - self.nodeStore[innerFirstNode].z
+                
+                for j in innerFirstNode...innerLastNode {
+                    
+                    let lastCcum = j == innerFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * faradsPerMeter
+                    let nextCcum = j == innerLastNode ? totalCapacitance : (self.nodeStore[j + 1].z - referenceZero) * faradsPerMeter
+                    
+                    let nextNodeCap = nodeCap(nodeIndex: j, z: self.nodeStore[j].z, cap: (nextCcum - lastCcum) / 2.0)
+                    innerNodeCaps.append(nextNodeCap)
+                }
+            }
+            
+            // At this point, the (inner -> outer) shunt capacitances are calculated; now calculate the (outer -> inner) capacitances
+            
+            var outerNodeCaps:[nodeCap] = []
+            
+            for j in outerFirstNode...outerLastNode {
+                
+                let lastCcum = j == outerFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * faradsPerMeter
+                let nextCcum = j == outerLastNode ? totalCapacitance : (self.nodeStore[j + 1].z - referenceZero) * faradsPerMeter
+                
+                let nextNodeCap = nodeCap(nodeIndex: j, z: self.nodeStore[j].z, cap: (nextCcum - lastCcum) / 2.0)
+                outerNodeCaps.append(nextNodeCap)
+            }
+            
+            // At this point, the two sets of node capacitances are set up. Take care of the trivial cases first, where the shunt capacitances from the innermost coil are to the core or a radial shield (a ground plane).
+            if i == 0 || hasShieldInside {
+                
+                for nextNodeCap in outerNodeCaps {
+                    
+                    self.nodeStore[nextNodeCap.nodeIndex].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: nextNodeCap.cap))
+                }
+            }
+            else {
+                
+                // Apply the Super Duper Shunt Capacitance Algorithm™ by PCH
+                
+                struct capLink {
+                    
+                    let innerNode:Int
+                    let outerNode:Int
+                    let aveCap:Double
+                }
+                
+                // set the indices into the various arrays
+                let inner = 0
+                let outer = 1
+                
+                // initialize arrays & variables
+                let nodeCaps = [innerNodeCaps, outerNodeCaps]
+                var currentNodeIndex = [0, 0]
+                var cumCap = [innerNodeCaps[0].cap, outerNodeCaps[0].cap]
+                // set the reference coil as the one whose first node has the lower capacitance (ie: the most nodes - I think)
+                var refCoil = nodeCaps[inner][0].cap <= nodeCaps[outer][0].cap ? inner : outer
+                var otherCoil = refCoil == inner ? outer : inner
+                var capLinks:[capLink] = []
+                var prevAverageC = 0.0
+                
+                while currentNodeIndex[inner] < nodeCaps[inner].count && currentNodeIndex[outer] < nodeCaps[outer].count {
+                
+                    // This is where weird things like large axial gaps in tapping windings are (should) be taken care of
+                    let thisAverageZ = (nodeCaps[inner][currentNodeIndex[inner]].z + nodeCaps[outer][currentNodeIndex[outer]].z) / 2.0
+                    let thisAverageC = (thisAverageZ - referenceZero) / referenceHt * totalCapacitance
+                    
+                    let innerNode = nodeCaps[inner][currentNodeIndex[inner]].nodeIndex
+                    let outerNode = nodeCaps[outer][currentNodeIndex[outer]].nodeIndex
+                    
+                    // capLinks.append(capLink(innerNode: nodeCaps[inner][currentNodeIndex[inner]].nodeIndex, outerNode: nodeCaps[outer][currentNodeIndex[outer]].nodeIndex, aveCap: averageC))
+                     
+                    let refValue = nodeCaps[refCoil][currentNodeIndex[refCoil]].cap / 2.0
+                    
+                    if abs(cumCap[inner] - cumCap[outer]) > refValue {
+                            
+                        currentNodeIndex[refCoil] += 1
+                        
+                        if currentNodeIndex[refCoil] >= nodeCaps[refCoil].count {
+                            
+                            break
+                        }
+                        
+                        cumCap[refCoil] += nodeCaps[refCoil][currentNodeIndex[refCoil]].cap
+                    }
+                    else {
+                        
+                        currentNodeIndex[refCoil] += 1
+                        currentNodeIndex[otherCoil] += 1
+                        
+                        if currentNodeIndex[inner] >= nodeCaps[inner].count && currentNodeIndex[outer] >= nodeCaps[outer].count {
+                            
+                            break
+                        }
+                        
+                        if currentNodeIndex[refCoil] < nodeCaps[refCoil].count {
+                            
+                            cumCap[refCoil] += nodeCaps[refCoil][currentNodeIndex[refCoil]].cap
+                        }
+                        else {
+                            
+                            currentNodeIndex[refCoil] = nodeCaps[refCoil].count - 1
+                        }
+                        
+                        if currentNodeIndex[otherCoil] < nodeCaps[otherCoil].count {
+                            
+                            cumCap[otherCoil] += nodeCaps[otherCoil][currentNodeIndex[otherCoil]].cap
+                        }
+                        else {
+                            
+                            currentNodeIndex[otherCoil] = nodeCaps[otherCoil].count - 1
+                        }
+                    }
+                    
+                    let nextAverageZ = (nodeCaps[inner][currentNodeIndex[inner]].z + nodeCaps[outer][currentNodeIndex[outer]].z) / 2.0
+                    let nextAverageC = (nextAverageZ - referenceZero) / referenceHt * totalCapacitance
+                    
+                    let averageC = (nextAverageC - prevAverageC) / 2
+                    
+                    prevAverageC = thisAverageC
+                    
+                    capLinks.append(capLink(innerNode: innerNode, outerNode: outerNode, aveCap: averageC))
+                    
+                    refCoil = nodeCaps[inner][currentNodeIndex[inner]].cap <= nodeCaps[outer][currentNodeIndex[outer]].cap ? inner : outer
+                    otherCoil = refCoil == inner ? outer : inner
+                }
+                
+                // add the final shunt capacitance
+                capLinks.append(capLink(innerNode: nodeCaps[inner].last!.nodeIndex, outerNode: nodeCaps[outer].last!.nodeIndex, aveCap: (totalCapacitance - prevAverageC) / 2))
+                
+                // convert the capLinks to shunt capacitances
+                for j in 0..<capLinks.count {
+                    
+                    // let lowIndex = max(0, j - 1)
+                    // let hiIndex = min(capLinks.count - 1, j + 1)
+                    // let shuntCap = (capLinks[hiIndex].aveCap - capLinks[lowIndex].aveCap) / 2.0
+                    
+                    let shuntCap = capLinks[j].aveCap
+                    self.nodeStore[capLinks[j].innerNode].shuntCapacitances.append(Node.shuntCap(toNode: capLinks[j].outerNode, capacitance: shuntCap))
+                    self.nodeStore[capLinks[j].outerNode].shuntCapacitances.append(Node.shuntCap(toNode: capLinks[j].innerNode, capacitance: shuntCap))
+                }
+            }
+            
+            // We now need to check if there is a radial shield OUTSIDE the coil
+            if let radialShieldOutside = try await self.RadialShieldOutside(coil: currentCoil) {
+                
+                let rsCoil = radialShieldOutside.radialPos
+                let rsCapacitance = try await self.CoilInnerShuntCapacitance(coil: rsCoil)
+                
+                let coilLastNode = outerLastNode
+                let coilFirstNode = outerFirstNode
+                
+                let rsFaradsPerMeter = rsCapacitance / referenceHt
+                
+                var rsNodeCaps:[nodeCap] = []
+                for j in coilFirstNode...coilLastNode {
+                    
+                    let lastCcum = j == coilFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * rsFaradsPerMeter
+                    let nextCcum = j == coilLastNode ? rsCapacitance : (self.nodeStore[j + 1].z - referenceZero) * rsFaradsPerMeter
+                    
+                    let nextNodeCap = nodeCap(nodeIndex: j, z: self.nodeStore[j].z, cap: (nextCcum - lastCcum) / 2.0)
+                    rsNodeCaps.append(nextNodeCap)
+                }
+                
+                for nextNodeCap in rsNodeCaps {
+                    
+                    self.nodeStore[nextNodeCap.nodeIndex].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: nextNodeCap.cap))
+                }
+            }
+            
+            // set some variables for the next time through the loop
+            innerCoilHt = outerCoilHt
+            innerFirstNode = outerFirstNode
+            
+        }
+        
+        // Add the shunt capacitances to ground for the outermost coil. The tank and the adjacent phase are both ground here -
+        // see OuterShuntCapacitance for what that assumes - so they are distributed as a single figure.
+        let outerTerms = try await OuterShuntCapacitance()
+        let outerCapacitance = outerTerms.tank + outerTerms.adjacentPhase
+        let referenceHt = self.nodeStore[coilTopNodes.last!].z - self.nodeStore[innerFirstNode].z
+        referenceZero = self.nodeStore[innerFirstNode].z
+        let faradsPerMeter = outerCapacitance / referenceHt
+        
+        for j in innerFirstNode...coilTopNodes.last! {
+            
+            let lastCcum = j == innerFirstNode ? 0.0 : (self.nodeStore[j - 1].z - referenceZero) * faradsPerMeter
+            let nextCcum = j == coilTopNodes.last! ? outerCapacitance : (self.nodeStore[j + 1].z - referenceZero) * faradsPerMeter
+            
+            self.nodeStore[j].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: (nextCcum - lastCcum) / 2.0))
+        }
+    }
+
+    // MARK: Shunt booking (TODO items 6, 6a and 6b)
+
+    /// The two ways `CalculateCapacitanceMatrix` can share the shunt capacitances out among the nodes.
+    ///
+    /// **Temporary.** The switch exists so that the two can be run on the same build and the same fixture and compared; once item
+    /// 6 is settled one of them goes. It is read from the `PCH_ShuntBooking` default, which `NSUserDefaults` fills from a launch
+    /// argument by itself - `-PCH_ShuntBooking overlap` - in the same way `SelfTest` gets its arguments. Anything else, including
+    /// no argument at all, is `.capLink`, so a normal launch is unchanged.
+    enum ShuntBooking: String, Sendable {
+
+        /// The Super Duper Shunt Capacitance Algorithm™: per-coil totals from the analytic formulas, spread at a uniform rate per
+        /// metre over the node z positions and matched up node to node across each hilo.
+        case capLink
+        /// Overlap-plus-decay: coupling booked disc pair by disc pair where the two conductors face each other, and decaying as
+        /// exp(-π·d/g) where they do not. See `OverlapDecayCoupling`.
+        case overlap
+    }
+
+    static var shuntBooking:ShuntBooking {
+
+        return ShuntBooking(rawValue: UserDefaults.standard.string(forKey: "PCH_ShuntBooking") ?? "") ?? .capLink
+    }
+
+    /// One side of a shunt pair: an axially sorted list of electrodes, each either a Segment (with the two nodes it is booked
+    /// onto) or a grounded surface (the core, a radial shield, the tank, the adjacent phase).
+    struct ShuntElectrode: Sendable {
+
+        let z1:Double
+        let z2:Double
+        /// The Segment's bottom and top node; nil for a grounded electrode.
+        let nodes:(bottom:Int, top:Int)?
+    }
+
+    /// The overlap-plus-decay coupling between two sides of a radial gap.
+    ///
+    /// # The rule
+    ///
+    /// The per-metre capacitance `c′` across the gap is what the analytic formulas already give - DV 12.61 for coil to coil,
+    /// K&K 7.15 for the tank and the adjacent phase. Every one of them is linear in the height H it is evaluated at, so
+    /// `c′ = C(H)/H` exactly. What this replaces is the height: rather than a single H for the pair (the average of the two
+    /// effective heights, for coil to coil), the coupling is integrated along z, and at each z it is
+    ///
+    ///     dC = c′ · exp(-π·(d_A(z) + d_B(z))/g) · dz,      booked to (nearest electrode of A, nearest electrode of B)
+    ///
+    /// where `d_A(z)` is the axial distance from z to the nearest conductor of side A (zero where A has conductor at z), and g
+    /// is the radial gap. So:
+    ///
+    /// * where both sides have conductor at z, the weight is 1 and the coupling is DV's;
+    /// * where only one does - a disc beyond the end of the other coil, or facing a gap in it - the weight is exp(-π·d/g), the
+    ///   decay of the field into a two-dimensional slot of width g from the edge of one of its electrodes. Integrated over a
+    ///   long overhang that is worth g/π of extra facing height per free edge;
+    /// * where neither does - two ducts facing each other - the weight is exp(-π·(d_A + d_B)/g). Over a duct a few mm high in
+    ///   a gap tens of mm wide that is close to 1, which is right: a disc stack seen from across the hilo is very nearly a
+    ///   continuous surface, and DV counts its full height for exactly that reason. (Weighting it 0 instead would take every
+    ///   duct out of the coupling of two aligned disc coils - 15-25% of the total - for no physical reason.)
+    ///
+    /// Item 5's 75 mm rule has no counterpart here: a small gap is counted almost in full and a large one fringes, on one rule.
+    ///
+    /// # What it is not
+    ///
+    /// An engineering estimate, not a field solution. exp(-πd/g) is the lowest mode of a uniform slot; the real gap is layered
+    /// (pressboard barriers in oil), the electrodes have finite radial build, and the end faces of the discs are ignored. The
+    /// electrostatic FE run proposed in 6b is the reference that calibrates the g to use.
+    ///
+    /// # The integration
+    ///
+    /// The integrand is piecewise exponential in z. Between consecutive breakpoints - every electrode edge, the midpoint of every
+    /// gap between two electrodes of the same side (where "nearest" changes over), and the ends of the window - the nearest
+    /// electrode on each side is fixed and each d is either 0 or linear in z, so d_A + d_B = K·z − C0 with K ∈ {−2, −1, 0, 1, 2},
+    /// and the piece integrates in closed form:
+    ///
+    ///     K = 0:  c′·(t − s)·exp(−π·D/g),    D the (constant) sum
+    ///     K ≠ 0:  c′·g/(π·K)·(exp(−π·D(s)/g) − exp(−π·D(t)/g))
+    ///
+    /// which is positive for either sign of K, and never evaluates a growing exponential because D ≥ 0 throughout.
+    ///
+    /// - Parameters:
+    ///   - a, b: each side's electrodes, sorted by z and not overlapping (the Segments of one coil never do).
+    ///   - gap: the radial gap g between the two sides' facing surfaces, m.
+    ///   - faradsPerMetre: c′, F/m.
+    ///   - zMin, zMax: the window the integration runs over - the yokes, which are grounded, end it.
+    /// - Returns: the capacitance between electrode `a[i]` and `b[j]`, keyed by (i, j). Every pair that gets any coupling at all
+    ///   appears; pairs that get none do not.
+    static func OverlapDecayCoupling(a:[ShuntElectrode], b:[ShuntElectrode], gap g:Double, faradsPerMetre:Double, zMin:Double, zMax:Double) -> [PairIndex:Double] {
+
+        guard !a.isEmpty, !b.isEmpty, g > 0.0, zMax > zMin else {
+
+            return [:]
+        }
+
+        var breaks:[Double] = [zMin, zMax]
+
+        for side in [a, b] {
+
+            for i in 0..<side.count {
+
+                breaks.append(side[i].z1)
+                breaks.append(side[i].z2)
+
+                if i > 0 {
+
+                    breaks.append((side[i - 1].z2 + side[i].z1) / 2.0)
+                }
+            }
+        }
+
+        breaks = breaks.filter({ $0 >= zMin && $0 <= zMax }).sorted()
+
+        // The nearest electrode of a side to z, as (index, k, e) with d(z) = k·(z − e): k = 0 inside it, +1 above it (e its top),
+        // −1 below it (e its bottom). Only ever asked at the midpoint of a piece, so z is never on a breakpoint.
+        func Nearest(_ side:[ShuntElectrode], _ z:Double) -> (index:Int, k:Double, e:Double) {
+
+            if z < side[0].z1 {
+
+                return (0, -1.0, side[0].z1)
+            }
+
+            for i in 0..<side.count {
+
+                if z <= side[i].z2 {
+
+                    if z >= side[i].z1 {
+
+                        return (i, 0.0, 0.0)
+                    }
+
+                    // in the gap between i - 1 and i (i > 0, because z >= side[0].z1)
+                    let midGap = (side[i - 1].z2 + side[i].z1) / 2.0
+                    return z < midGap ? (i - 1, 1.0, side[i - 1].z2) : (i, -1.0, side[i].z1)
+                }
+            }
+
+            return (side.count - 1, 1.0, side[side.count - 1].z2)
+        }
+
+        var result:[PairIndex:Double] = [:]
+
+        for p in 0..<breaks.count - 1 {
+
+            let s = breaks[p]
+            let t = breaks[p + 1]
+
+            // breakpoints closer than a micron are the same edge (see MeshBuilder.coordinateTolerance, for the same reason)
+            guard t - s > 1.0e-6 else {
+
+                continue
+            }
+
+            let mid = (s + t) / 2.0
+            let nearA = Nearest(a, mid)
+            let nearB = Nearest(b, mid)
+
+            let K = nearA.k + nearB.k
+            let C0 = nearA.k * nearA.e + nearB.k * nearB.e
+
+            // the distance sum at each end of the piece; never negative, but clamp the rounding
+            let Ds = max(0.0, K * s - C0)
+            let Dt = max(0.0, K * t - C0)
+
+            let pieceC:Double
+
+            if K == 0.0 {
+
+                pieceC = faradsPerMetre * (t - s) * exp(-π * Ds / g)
+            }
+            else {
+
+                pieceC = faradsPerMetre * g / (π * K) * (exp(-π * Ds / g) - exp(-π * Dt / g))
+            }
+
+            result[PairIndex(a: nearA.index, b: nearB.index), default: 0.0] += pieceC
+        }
+
+        return result
+    }
+
+    struct PairIndex: Hashable, Sendable {
+
+        let a:Int
+        let b:Int
+    }
+
+    /// The shunt booking by overlap-plus-decay (TODO item 6b, step 1). Books, for every radial gap in the phase:
+    ///
+    /// 1. **coil i to whatever is inside it** - the core for coil 0, a radial shield if there is one, otherwise coil i − 1 - at
+    ///    `c′ = CoilInnerShuntCapacitance(i) / CapacitiveHeightInner(i)` across `HiloUnder(i)`;
+    /// 2. **coil i to a radial shield outside it**, the same way from the shield's side;
+    /// 3. **the outermost coil to the tank and to the adjacent phase**, as two separate walks, because their gaps differ by a
+    ///    factor of several and the gap sets the decay. `c′` is each term of `OuterShuntCapacitance` over the outermost coil's
+    ///    `EffectiveHeight`, which is the H that function evaluates at; the gaps are the coil's OD to the tank wall and to the
+    ///    midplane between the phases.
+    ///
+    /// The core, a shield, the tank and the adjacent phase are grounded electrodes; the core, tank and phase run the full window
+    /// height. Each Segment-to-Segment capacitance is split a quarter onto each of the four pairs of their end nodes, and a
+    /// Segment-to-ground one half onto each end node - the π split `CalculateCapacitanceMatrix` already uses (TODO item 4).
+    ///
+    /// The per-metre values come from exactly the functions the `.capLink` booking uses, so where the two disagree it is the
+    /// distribution and the height that differ, not the physics of the gap.
+    private func BookShuntCapacitancesByOverlap() async throws {
+
+        // Segment serial number -> its bottom and top node
+        var bottomNode:[Int:Int] = [:]
+        var topNode:[Int:Int] = [:]
+
+        for nextNode in self.nodeStore {
+
+            if let above = nextNode.aboveSegment {
+
+                bottomNode[above.serialNumber] = nextNode.number
+            }
+
+            if let below = nextNode.belowSegment {
+
+                topNode[below.serialNumber] = nextNode.number
+            }
+        }
+
+        let nodesOf = (bottom: bottomNode, top: topNode)
+        let coilSegments = self.CoilSegments()
+
+        func CoilElectrodes(_ coil:Int) async throws -> [ShuntElectrode] {
+
+            var result:[ShuntElectrode] = []
+
+            for nextSegment in coilSegments where nextSegment.radialPos == coil {
+
+                guard let bottom = nodesOf.bottom[nextSegment.serialNumber], let top = nodesOf.top[nextSegment.serialNumber] else {
+
+                    throw PhaseModelError(info: "segment \(nextSegment.serialNumber) has no node at one of its ends", type: .UnresolvableConnector)
+                }
+
+                result.append(ShuntElectrode(z1: await nextSegment.z1, z2: await nextSegment.z2, nodes: (bottom, top)))
+            }
+
+            return result.sorted(by: { $0.z1 < $1.z1 })
+        }
+
+        func ShieldElectrodes(_ radialPos:Int) async -> [ShuntElectrode] {
+
+            var result:[ShuntElectrode] = []
+
+            for nextSegment in self.segmentStore where nextSegment.radialPos == radialPos && !nextSegment.isStaticRing {
+
+                result.append(ShuntElectrode(z1: await nextSegment.z1, z2: await nextSegment.z2, nodes: nil))
+            }
+
+            return result.sorted(by: { $0.z1 < $1.z1 })
+        }
+
+        let window = [ShuntElectrode(z1: 0.0, z2: self.core.realWindowHeight, nodes: nil)]
+
+        func Book(_ a:[ShuntElectrode], _ b:[ShuntElectrode], gap:Double, faradsPerMetre:Double) {
+
+            let coupling = PhaseModel.OverlapDecayCoupling(a: a, b: b, gap: gap, faradsPerMetre: faradsPerMetre, zMin: 0.0, zMax: self.core.realWindowHeight)
+
+            for (pair, capacitance) in coupling where capacitance > 0.0 {
+
+                switch (a[pair.a].nodes, b[pair.b].nodes) {
+
+                case (let aNodes?, let bNodes?):
+
+                    for aNode in [aNodes.bottom, aNodes.top] {
+
+                        for bNode in [bNodes.bottom, bNodes.top] {
+
+                            self.nodeStore[aNode].shuntCapacitances.append(Node.shuntCap(toNode: bNode, capacitance: capacitance / 4.0))
+                            self.nodeStore[bNode].shuntCapacitances.append(Node.shuntCap(toNode: aNode, capacitance: capacitance / 4.0))
+                        }
+                    }
+
+                case (let aNodes?, nil):
+
+                    self.nodeStore[aNodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+                    self.nodeStore[aNodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+
+                case (nil, let bNodes?):
+
+                    self.nodeStore[bNodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+                    self.nodeStore[bNodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+
+                case (nil, nil):
+
+                    break
+                }
+            }
+        }
+
+        let coils = Array(Set(coilSegments.map({ $0.radialPos }))).sorted()
+
+        for coil in coils {
+
+            let outer = try await CoilElectrodes(coil)
+
+            // 1. coil to whatever is inside it
+            let inner:[ShuntElectrode]
+
+            if let innerShield = try await self.RadialShieldInside(coil: coil) {
+
+                inner = await ShieldElectrodes(innerShield.radialPos)
+            }
+            else if coil == 0 {
+
+                inner = window
+            }
+            else {
+
+                inner = try await CoilElectrodes(coil - 1)
+            }
+
+            let innerC = try await self.CoilInnerShuntCapacitance(coil: coil)
+            let innerH = try await self.CapacitiveHeightInner(coil: coil)
+            let innerGap = try await self.HiloUnder(coil: coil)
+
+            Book(inner, outer, gap: innerGap, faradsPerMetre: innerC / innerH)
+
+            // 2. coil to a radial shield outside it
+            if let outerShield = try await self.RadialShieldOutside(coil: coil) {
+
+                let rsCoil = outerShield.radialPos
+                let shieldC = try await self.CoilInnerShuntCapacitance(coil: rsCoil)
+                let shieldH = try await self.CapacitiveHeightInner(coil: rsCoil)
+                let shieldGap = try await self.HiloUnder(coil: rsCoil)
+
+                Book(outer, await ShieldElectrodes(rsCoil), gap: shieldGap, faradsPerMetre: shieldC / shieldH)
+            }
+        }
+
+        // 3. the outermost coil to the tank and to the adjacent phase
+        guard let lastCoil = coils.last, let lastCoilSeg = coilSegments.last else {
+
+            throw PhaseModelError(info: "", type: .EmptyModel)
+        }
+
+        let outermost = try await CoilElectrodes(lastCoil)
+        let outerTerms = try await self.OuterShuntCapacitance()
+        let outerH = try await self.EffectiveHeight(coil: lastCoil)
+        let R = await lastCoilSeg.r2
+
+        Book(outermost, window, gap: self.tankDepth / 2.0 - R, faradsPerMetre: outerTerms.tank / outerH)
+
+        if outerTerms.adjacentPhase > 0.0 {
+
+            Book(outermost, window, gap: self.core.legCenters / 2.0 - R, faradsPerMetre: outerTerms.adjacentPhase / outerH)
+        }
+    }
+
     /// The outermost coil's shunt capacitance to everything outside it: the tank, and the outermost coil of the adjacent phase
     /// (per Kulkarni 7.15).
     ///
