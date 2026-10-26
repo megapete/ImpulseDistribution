@@ -292,6 +292,14 @@ zero from the row surgery, so there is nothing to tune between that and 0.65) an
 line-end gradient alone. Those two are what survive the model not applying, and the gradient is still the comparable number:
 **25.18× average plain against 0.615× interleaved**.
 
+**It is declined for a tie part way along the coil, too** (`InteriorTie`, 2026-10-26). A node between the coil's ends that is
+tied to another winding, to ground or to the impulse is a third boundary condition the sinh cannot carry. `S0747-shield` showed it:
+the HV centre tied to the paralleled RV hangs a large capacitance at x = 0.5, the lower half sits on a ~0.17 p.u. pedestal with
+local α ≈ 1.8, and the single fitted α came out at **2.53, outside the 3.24–5.62 bracket, on a correct model**. The upper half's
+local α (3.1–3.9) was inside all along, and a control with the RV grounded instead of tied fitted **3.95, inside**. A bridged gap
+whose two leads are both the coil's own is not a tie. Both T0239 LTC scenarios decline on the same grounds: their HV is cut at the
+centre and tied to the tapping winding.
+
 ## The S0738 `-parallel` trio: the same wiring reached three ways
 
 `S0738-parallel`, `S0738-parallel-edited` and `S0738-parallel-edited-2` wire the *same* fixture the way a double-stacked tap

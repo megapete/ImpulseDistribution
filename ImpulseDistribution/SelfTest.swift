@@ -2725,7 +2725,8 @@ enum SelfTest {
         // The computed distribution, as (x, V) with x running from the grounded end to the line end. CoilVoltageProfile
         // is sorted by ascending height; which end is driven is settled by looking at where the impulse actually is,
         // not by assuming the top, because a coil can be driven from either end.
-        let impulsedNodes = (try? await model.ResolveNodeConnectivity())?.impulsed ?? []
+        let connectivity = try? await model.ResolveNodeConnectivity()
+        let impulsedNodes = connectivity?.impulsed ?? []
         let drivenAtTop = impulsedNodes.contains(profile.last?.nodeIndex ?? -1)
 
         guard let lowZ = profile.first?.z, let highZ = profile.last?.z, highZ > lowZ else {
@@ -2771,7 +2772,16 @@ enum SelfTest {
         // baseline, and the line-end gradient, which is the number the designer acts on.
         let groundedEndVoltage = points[0].v
 
-        guard abs(groundedEndVoltage) < groundedEndTolerance else {
+        // The same is true of a connection PART WAY ALONG the coil. 13.5.1 is a uniform ladder with nothing attached between its
+        // two ends; a node in the middle tied to another winding, to ground or to the impulse is a third boundary condition the sinh
+        // cannot carry. On S0747 the HV's centre is tied to the paralleled RV, which hangs a large capacitance at x = 0.5 that
+        // flattens the lower half onto a ~0.17 p.u. pedestal; the upper half's local alpha sits inside the bracket (3.1 to 3.9
+        // against 3.24 to 5.62), but the single fitted alpha came out at 2.53, OUTSIDE it, on a correct model. With the RV grounded
+        // instead of tied, the same capacitances fit to 3.95, inside. A bridged gap within the coil is not such a tie - both of its
+        // leads are this coil's, and the winding is still one ladder - so only a tie that leaves the coil counts.
+        let interiorTie = InteriorTie(profile: profile, connectivity: connectivity, nodes: await model.nodes)
+
+        guard abs(groundedEndVoltage) < groundedEndTolerance, interiorTie == nil else {
 
             text += "  Driven end:            \(drivenAtTop ? "top" : "bottom")\n"
             text += "  Nodes compared:        \(points.count)\n"
@@ -2779,9 +2789,18 @@ enum SelfTest {
             text += "  Cg booked to ground:   \(Farads(ground.direct))   (tank + adjacent phase - see the split above)\n"
             text += "  Cg to other coils:     \(Farads(ground.toOtherCoils))\n\n"
 
-            text += String(format: "  NOT COMPARED against 13.5.1: the far end of coil %d is at %.4f p.u., not at ground.\n", coil, groundedEndVoltage)
-            text += "  The continuum model assumes V(0) = 0, so no alpha fitted to this distribution would mean anything. This\n"
-            text += "  coil's return path runs through another winding rather than straight to ground - see the jumpers above.\n\n"
+            if let tie = interiorTie {
+
+                text += "  NOT COMPARED against 13.5.1: \(tie).\n"
+                text += "  The continuum model is a uniform ladder with nothing attached between its ends, so no single alpha fitted to\n"
+                text += "  this distribution would mean anything. Read the local alpha column either side of the tie instead.\n\n"
+            }
+            else {
+
+                text += String(format: "  NOT COMPARED against 13.5.1: the far end of coil %d is at %.4f p.u., not at ground.\n", coil, groundedEndVoltage)
+                text += "  The continuum model assumes V(0) = 0, so no alpha fitted to this distribution would mean anything. This\n"
+                text += "  coil's return path runs through another winding rather than straight to ground - see the jumpers above.\n\n"
+            }
 
             let gradient = LineEndGradient(points: points)
             text += String(format: "  Line-end gradient over the end section: %.4f x the average gradient\n\n", gradient)
@@ -2802,8 +2821,9 @@ enum SelfTest {
 
             text += "\n"
 
-            let summary = String(format: "13.5.1 not applicable (far end at %.4f p.u., not grounded); line-end gradient %.3f x average, far end %.4f p.u.",
-                                 groundedEndVoltage, gradient, groundedEndVoltage)
+            let reason = interiorTie ?? String(format: "far end at %.4f p.u., not grounded", groundedEndVoltage)
+            let summary = String(format: "13.5.1 not applicable (%@); line-end gradient %.3f x average, far end %.4f p.u.",
+                                 reason, gradient, groundedEndVoltage)
 
             return (text, summary)
         }
@@ -2899,6 +2919,49 @@ enum SelfTest {
                              alphaDirect, alphaTotal, alphaFitted, bracketed ? "inside" : "OUTSIDE", modelEnhancement)
 
         return (text, summary)
+    }
+
+    /// Describe the first node strictly between a coil's two ends that is tied to something outside the coil - another coil, ground
+    /// or the impulse - or return nil if there is none. A jumpered group whose members all belong to the coil (a bridged gap) is
+    /// not a tie: the winding is still one ladder from end to end.
+    private static func InteriorTie(profile:[PhaseModel.CoilProfilePoint], connectivity:PhaseModel.NodeConnectivity?, nodes:[Node]) -> String? {
+
+        guard let connectivity = connectivity, profile.count > 2 else {
+
+            return nil
+        }
+
+        let coilNodes = Set(profile.map({ $0.nodeIndex }))
+
+        for nextPoint in profile.dropFirst().dropLast() {
+
+            let number = nextPoint.nodeIndex
+
+            if connectivity.grounded.contains(number) || connectivity.impulsed.contains(number) {
+
+                return String(format: "node %d, %.0f mm up the coil, is %@", number, nextPoint.z * 1000.0, connectivity.grounded.contains(number) ? "grounded" : "impulsed")
+            }
+
+            for group in connectivity.mergedGroups {
+
+                let members = [group.kept] + group.eliminated
+
+                guard members.contains(number) else {
+
+                    continue
+                }
+
+                let outside = members.filter({ !coilNodes.contains($0) })
+
+                if let other = outside.first {
+
+                    let otherCoil = nodes.first(where: { $0.number == other }).flatMap({ $0.aboveSegment?.radialPos ?? $0.belowSegment?.radialPos })
+                    return String(format: "node %d, %.0f mm up the coil, is tied to node %d", number, nextPoint.z * 1000.0, other) + (otherCoil.map({ " of coil \($0)" }) ?? "")
+                }
+            }
+        }
+
+        return nil
     }
 
     /// How far from zero the far end of a coil may sit and still be called grounded, in per unit of the crest.
