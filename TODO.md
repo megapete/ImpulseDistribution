@@ -103,6 +103,28 @@ The likely place is the `capLink` loop, or the `referenceHt`/`referenceZero` boo
 **sheet**, so it has only two nodes against the HV's 77, which is the most mismatched pairing the loop can be given. First
 step: sum the capLinks for each coil pair on every fixture and compare each sum against `CoilInnerShuntCapacitance`.
 
+**The HV–RV pair on the same fixture (hand-checked 2026-10-26):**
+
+- **Tank and adjacent phase:** exact. `OuterShuntCapacitance` gives 3.4357e-11 F and 9.9389e-11 F, and so does the hand
+  calculation, to six figures.
+- **The pair's total is 7% short as well:** 6.687e-10 F booked against 7.215e-10 F from `CoilInnerShuntCapacitance(coil: 2)`.
+  The shield-to-HV pair, which never enters the `capLink` loop, is exact, so the loop is the suspect for both pairs.
+- **The total itself is arguably high.** `CapacitiveHeightInner` takes the AVERAGE of the two effective heights, 0.623 m, but
+  the RV's own effective height is only 0.310 m: two 155 mm stacks either side of a 406 mm gap. What the two coils actually
+  present to each other is the RV's height plus fringing.
+- **The distribution is the bigger problem.** The coupling is spread along the HV's full 1012 mm at a uniform rate. So the HV
+  discs facing the RV's empty 406 mm gap (HV nodes 22–47), and those above and below the RV's ends, are each linked to the
+  nearest RV node. Result:
+  - RV centre leads 95 and 96 carry **1.49e-10 and 1.44e-10 F**, 43% of all the HV–RV coupling, against 6–8e-12 F on an
+    ordinary RV node.
+  - HV nodes 37 and 38 carry a spike of **7.7e-11 F each**, 17× their neighbours.
+  - Because 95 and 96 are tied to the HV centre on S0747, about 25 HV discs that face only oil end up capacitively coupled
+    to their own centre node. That is a large part of the lower half's ~0.17 p.u. "pedestal" in the initial distribution.
+- **The RV's ground capacitance has the same gap effect:** the total is conserved, but 58% of it lands on 95 and 96.
+
+A fix would book coupling only where the two coils' conductors actually face each other, plus some fringing at the
+ends and gap edges. That is item 6's algorithm, which is parked for discussion.
+
 ## Dielectric stress screen
 
 Added 2026-08-05 (`DielectricStress.swift`, `TurnLadderModel.swift`). See `docs/dielectric-stress.md` for the method and its
