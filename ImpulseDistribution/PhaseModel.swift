@@ -2422,8 +2422,8 @@ actor PhaseModel /*:Codable */ {
     ///
     /// **Temporary.** The switch exists so that the two can be run on the same build and the same fixture and compared; once item
     /// 6 is settled one of them goes. It is read from the `PCH_ShuntBooking` default, which `NSUserDefaults` fills from a launch
-    /// argument by itself - `-PCH_ShuntBooking overlap` - in the same way `SelfTest` gets its arguments. Anything else, including
-    /// no argument at all, is `.capLink`, so a normal launch is unchanged.
+    /// argument by itself - `-PCH_ShuntBooking capLink` - in the same way `SelfTest` gets its arguments. Anything else, including
+    /// no argument at all, is `.overlap`, the default since 2026-10-26 (TODO item 6c).
     enum ShuntBooking: String, Sendable {
 
         /// The Super Duper Shunt Capacitance Algorithm™: per-coil totals from the analytic formulas, spread at a uniform rate per
@@ -2436,7 +2436,7 @@ actor PhaseModel /*:Codable */ {
 
     static var shuntBooking:ShuntBooking {
 
-        return ShuntBooking(rawValue: UserDefaults.standard.string(forKey: "PCH_ShuntBooking") ?? "") ?? .capLink
+        return ShuntBooking(rawValue: UserDefaults.standard.string(forKey: "PCH_ShuntBooking") ?? "") ?? .overlap
     }
 
     /// One side of a shunt pair: an axially sorted list of electrodes, each either a Segment (with the two nodes it is booked
@@ -2853,6 +2853,27 @@ actor PhaseModel /*:Codable */ {
                 else {
                     
                     prevIR = self.core.radius
+                }
+            }
+            else if coil < 0 {
+                
+                // A radial shield, asked for its capacitance to the coil INSIDE it (CalculateCapacitanceMatrix asks, through
+                // RadialShieldOutside). That is coil (-coil) - 1, the one HiloUnder measures the gap from; the shield over the core
+                // has the core inside it instead. A shield must not fall through to the branch below: there SegmentAt(radial: -coil)
+                // is the coil OUTSIDE the shield, and rGap was taken from that coil's OD - 537 mm instead of 222 mm on S0747-shield,
+                // so 2.4x the LV-to-shield capacitance (TODO item 6c).
+                if coil == Segment.negativeZeroPosition {
+                    
+                    prevIR = self.core.radius
+                }
+                else {
+                    
+                    guard let insideCoilSeg = await self.SegmentAt(location: LocStruct(radial: (-coil) - 1, axial: 0)) else {
+                        
+                        throw PhaseModelError(info: "\((-coil) - 1)", type: .CoilDoesNotExist)
+                    }
+                    
+                    prevIR = await insideCoilSeg.r2
                 }
             }
             else if let innerShield = await self.SegmentAt(location: LocStruct(radial: -coil, axial: 0)) {

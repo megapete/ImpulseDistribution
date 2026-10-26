@@ -2405,7 +2405,7 @@ enum SelfTest {
     ///
     /// The totals are TODO item 6a's first check (does the booking conserve what the formulas give?) and the largest share is 6b's
     /// symptom (a gap in one coil piling its neighbour's coupling onto the gap's edge nodes). Both are printed for either booking,
-    /// so that two runs of the same scenario with and without `-PCH_ShuntBooking overlap` can be put side by side.
+    /// so that two runs of the same scenario with and without `-PCH_ShuntBooking capLink` can be put side by side.
     private static func ShuntBookingReport(model:PhaseModel) async -> String {
 
         var text = "SHUNT BOOKING: \(PhaseModel.shuntBooking.rawValue)\n"

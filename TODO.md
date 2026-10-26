@@ -172,8 +172,9 @@ and the HV's other paths to the tank.
 #### 6c. Overlap-plus-decay booking — implemented behind a switch, 2026-10-26
 
 Step 1 of 6b is in, as `PhaseModel.BookShuntCapacitancesByOverlap` (the rule and its integration are documented on
-`OverlapDecayCoupling`). **It is off by default.** `-PCH_ShuntBooking overlap` on the command line selects it; anything else,
-or nothing, runs the original `capLink` booking, which is unchanged and has been moved into `BookShuntCapacitancesByCapLink`.
+`OverlapDecayCoupling`). **It has been the default since 2026-10-26 (version 1.3.2).** `-PCH_ShuntBooking capLink` on the
+command line brings back the original booking, which is unchanged and now lives in `BookShuntCapacitancesByCapLink`. Keep that
+switch until the FE run (6d) has settled the rule, then delete `capLink`.
 The SelfTest report now has a `SHUNT BOOKING` section that prints, for either method, the booked total for each coil pair and
 for each coil to ground, the single node that carries the largest share, and the analytic totals beside them.
 
@@ -212,13 +213,50 @@ books the same total from both sides, and `S0747-shield` under `capLink` reprodu
   RV's 213 mm clearance to the yoke and larger than half its 406 mm centre gap. This is the main reason the RV's ground C rises
   56%. The phase-to-phase walk (g = 57 mm) is on firmer ground. The FE run should settle both.
 
-**Found on the way, not fixed:** `CoilInnerShuntCapacitance` for a radial shield (negative `coil`) takes its `prevIR` from
-`SegmentAt(radial: -coil)`. For a shield, that finds the coil **outside** the shield, not the one inside it. On `S0747-shield`
-that makes rGap 537 mm instead of 222 mm, so the LV-to-shield capacitance, 3.065e-9 F, is about 2.4× too high. Both bookings
-use it, and on S0747 the LV is grounded at both ends so it does not reach the HV, but it is wrong.
+**Found on the way, and fixed in 1.3.2:** `CoilInnerShuntCapacitance` for a radial shield (negative `coil`) took its `prevIR`
+from `SegmentAt(radial: -coil)`. For a shield, that is the coil **outside** it, so rGap was 537 mm instead of 222 mm on
+`S0747-shield`. The LV-to-shield capacitance was 3.065e-9 F; it is now 1.346e-9 F. The HV results are unchanged, because the
+LV is grounded at both ends.
 
-**Next:** PCH to review the 6c numbers, then decide whether `overlap` becomes the default. Step 2 (the electrostatic FE) is
-the calibration for g, particularly for the tank and for the aligned-end term.
+#### 6d. NEXT UP: electrostatic FE reference for the shunt matrix
+
+The purpose: 6c's rule `exp(−π·d/g)` is a slot estimate. It is weakest at the tank (g = 467 mm on S0747), at aligned coil ends
+(the g/2π-per-end term), and across layered barrier/oil gaps. An axisymmetric electrostatic solve of S0747 gives the whole
+disc-to-disc and disc-to-ground matrix, fringing included. It is the reference for choosing g, or for replacing the rule
+outright. Compare it with the `SHUNT BOOKING` section of the SelfTest report.
+
+**What `PchAxiSymFE` (`../PchAxiSymFePackage`) lacks.** `ElectrostaticFormulation` supplies only the radial weight 2πεr; the
+claim that it is "a formulation swap" is not yet true.
+
+1. **The material coefficient is hard-wired to reluctivity** (`Assembler.swift:147`, `BorderedConstraint.swift:124`), and
+   `material.permittivity` is never read. The formulation needs to choose the coefficient as well as the weight. The magnetic
+   tests guard the refactor.
+2. **Electrode nodes.** `AxiSymMesh.dirichletNodes` is fixed when the mesh is built, from the domain boundary only. Each disc
+   needs to become an electrode, with every node on or inside its rectangle fixed. The mesher already puts grid lines on every
+   disc face.
+3. **One factorization, many excitations.** Factorize the free-node matrix once. For each electrode i, set V = 1 there and 0
+   on all others, ground and the other discs included. The right-hand side is −K_fc·V_c. That is about 110 solves on S0747.
+4. **Charge extraction by reaction**, Q_j = Σ over electrode j's nodes of (K·φ_i), using the full, unreduced K. This equals
+   φ_jᵀKφ_i in Galerkin form, so the matrix is symmetric for free. The energy method gives the same at N² times the cost.
+   Mutual capacitance is −C_ij; capacitance to ground is the row sum.
+5. **Tests:** coaxial cylinders against 2πεL/ln(b/a); two dielectric layers in series; symmetry; row sums; Richardson
+   convergence (`Validation/Richardson.swift`).
+
+**Modelling choices, made to match the analytic formulas so that only the geometry differs:**
+
+- Each Segment is one equipotential electrode, using its live `rect`.
+- Hilo sticks and radial spacers are smeared as fs·ε_board + (1 − fs)·ε_oil, as DV 12.61 is implemented.
+- The `Npress` barriers are real pressboard cylinders.
+- Core surface, yokes and tank are grounded.
+- The adjacent phase cannot be axisymmetric, so it keeps its analytic term.
+- The FE tank is a coaxial cylinder, not Kulkarni's cylinder-to-plane, so it will not reproduce `OuterShuntCapacitance`. That
+  difference is expected and is not a bug.
+- Pairs of discs in the same coil come out of the FE too, but they are dropped: DV's series capacitance already counts them.
+
+**The bridge** is `FePhase.swift`, the app's only point of contact with the package; read its header first. Two open
+questions for PCH: is the FE only a reference, or the eventual production source of the shunt terms, as it is for inductance?
+And one limitation shared with 6c: a continuous disc faces the inner coil with its inner turn, so the quarter-per-node-pair
+split is itself an approximation.
 
 ## Dielectric stress screen
 
