@@ -2434,9 +2434,9 @@ actor PhaseModel /*:Codable */ {
         /// Overlap-plus-decay: coupling booked disc pair by disc pair where the two conductors face each other, and decaying as
         /// exp(-π·d/g) where they do not. See `OverlapDecayCoupling`.
         case overlap
-        /// The electrostatic FE reference (TODO item 6d), booked Segment pair by Segment pair, with the adjacent phase added by
-        /// the overlap rule because the FE cannot represent it. An experiment, not a production path: it costs a mesh and a solve
-        /// per Segment every time C is built. See `BookShuntCapacitancesByFE`.
+        /// Coil-to-coil terms from the electrostatic FE reference (TODO item 6d), everything to ground by the overlap rule. An
+        /// experiment, not a production path: it costs a mesh and a solve per Segment every time C is built. See
+        /// `BookShuntCapacitancesByFE`.
         case fe
     }
 
@@ -2620,7 +2620,10 @@ actor PhaseModel /*:Codable */ {
     ///
     /// The per-metre values come from exactly the functions the `.capLink` booking uses, so where the two disagree it is the
     /// distribution and the height that differ, not the physics of the gap.
-    private func BookShuntCapacitancesByOverlap() async throws {
+    ///
+    /// - parameter coilPairs: false leaves out every coil-to-coil gap and books only the ones to grounded electrodes (core,
+    ///   shields, tank, adjacent phase), for `BookShuntCapacitancesByFE` to fill in the coil pairs from the FE.
+    private func BookShuntCapacitancesByOverlap(coilPairs:Bool = true) async throws {
 
         // Segment serial number -> its bottom and top node
         var bottomNode:[Int:Int] = [:]
@@ -2726,9 +2729,13 @@ actor PhaseModel /*:Codable */ {
 
                 inner = window
             }
-            else {
+            else if coilPairs {
 
                 inner = try await CoilElectrodes(coil - 1)
+            }
+            else {
+
+                inner = []
             }
 
             let innerC = try await self.CoilInnerShuntCapacitance(coil: coil)
@@ -2768,17 +2775,80 @@ actor PhaseModel /*:Codable */ {
         }
     }
 
-    /// The shunt booking from the electrostatic FE reference (TODO item 6d), behind `-PCH_ShuntBooking fe`.
+    /// The shunt booking with the coil-to-coil terms from the electrostatic FE reference (TODO item 6d), behind
+    /// `-PCH_ShuntBooking fe`.
     ///
-    /// The FE matrix is Segment to Segment, and is put on the nodes by the same split the other bookings use: a pair's
-    /// capacitance a quarter onto each of the four pairs of their end nodes, a Segment's capacitance to ground half onto each end
-    /// node. Pairs within one coil are dropped, since the series capacitance covers them. A radial shield is earthed and has no
-    /// nodes, so a Segment's capacitance to one is booked to ground; so is the capacitance to any other Segment without two end
-    /// nodes.
+    /// Only the coil-to-coil terms come from the FE, because they are the only ones it can be trusted for: its yokes and tank are
+    /// axisymmetric idealizations that overstate everything ending on them (see `FeShuntReference`). Every term to a grounded
+    /// electrode - the core, a radial shield, the tank, the adjacent phase - is booked by the overlap rule, exactly as
+    /// `BookShuntCapacitancesByOverlap` books it. The FE runs in the `.open` enclosure, with no yokes or tank to take the end
+    /// fringing away from the coil pairs.
     ///
-    /// The FE has the core, the yokes and a coaxial tank, but no adjacent phase: that term is added for the outermost coil by
-    /// the overlap rule, exactly as `BookShuntCapacitancesByOverlap` books it.
+    /// The FE matrix is Segment to Segment, and is put on the nodes by the same split the other bookings use: a quarter of a
+    /// pair's capacitance onto each of the four pairs of their end nodes. A static ring's coupling goes onto its coil's end
+    /// node (see `ShuntElectrodeNodes`). Pairs within one coil are dropped, since the series capacitance covers them.
     private func BookShuntCapacitancesByFE() async throws {
+
+        try await BookShuntCapacitancesByOverlap(coilPairs: false)
+
+        let segments = self.segments
+        let electrodeNodes = await self.ShuntElectrodeNodes()
+        let inputs = try await self.ElectrostaticReferenceInputs()
+        let coreRadius = self.core.radius
+        let windowHeight = self.core.realWindowHeight
+        let tankRadius = self.tankDepth / 2.0
+
+        // Off the actor: a mesh and a solve per Segment, a few seconds on a real winding.
+        let result = try await Task.detached {
+
+            try FeShuntReference.Solve(coreRadius: coreRadius, windowHeight: windowHeight, tankRadius: tankRadius, electrodes: inputs.electrodes, dielectrics: inputs.dielectrics, enclosure: PhaseModel.feShuntEnclosure)
+        }.value
+
+        guard let fe = result.first else {
+
+            throw PhaseModelError(info: "", type: .EmptyModel)
+        }
+
+        for a in segments.indices {
+
+            guard let aNodes = electrodeNodes[a] else {
+
+                continue
+            }
+
+            for b in segments.indices where b != a && segments[b].radialPos != segments[a].radialPos {
+
+                guard let bNodes = electrodeNodes[b] else {
+
+                    continue
+                }
+
+                // Spread evenly over every pair of their nodes: a quarter each between two coil Segments, a half each between a
+                // static ring and a coil Segment. Each pair is visited from both sides, and each visit books its own side.
+                let share = fe.Mutual(a, b) / Double(aNodes.count * bNodes.count)
+
+                for aNode in aNodes {
+
+                    for bNode in bNodes {
+
+                        self.nodeStore[aNode].shuntCapacitances.append(Node.shuntCap(toNode: bNode, capacitance: share))
+                    }
+                }
+            }
+        }
+    }
+
+    /// The nodes each of `segments` is booked onto when its FE coupling to another coil is put into C, in `segments` order.
+    ///
+    /// - A coil Segment: its bottom and top node.
+    /// - A static ring: the one node at the end of its own coil that it sits beside, the end of the nearest Segment of that coil.
+    ///   A ring has no nodes of its own - it is a shielding element, tied to the coil end, and its effect on the series
+    ///   capacitance is booked through the end disc's `adjStaticRing` - but its coupling to the NEXT coil is real and large: on
+    ///   S0747 the RV's rings catch the HV's fringe field at the RV's outer ends, which the end discs then do not see. Leaving it
+    ///   out would drop that coupling altogether.
+    /// - A radial shield, or anything else without nodes: nil. A shield is earthed, so a coupling to it is a ground term and is
+    ///   not booked from the FE at all.
+    func ShuntElectrodeNodes() async -> [[Int]?] {
 
         var bottomNode:[Int:Int] = [:]
         var topNode:[Int:Int] = [:]
@@ -2796,109 +2866,49 @@ actor PhaseModel /*:Codable */ {
             }
         }
 
-        let segments = self.segments
-        let inputs = try await self.ElectrostaticReferenceInputs()
-        let coreRadius = self.core.radius
-        let windowHeight = self.core.realWindowHeight
-        let tankRadius = self.tankDepth / 2.0
+        let coilSegments = self.CoilSegments()
+        var result:[[Int]?] = []
 
-        // Off the actor: a mesh and a solve per Segment, a few seconds on a real winding.
-        let result = try await Task.detached {
+        for nextSegment in self.segments {
 
-            try FeShuntReference.Solve(coreRadius: coreRadius, windowHeight: windowHeight, tankRadius: tankRadius, electrodes: inputs.electrodes, dielectrics: inputs.dielectrics)
-        }.value
+            if nextSegment.isRadialShield {
 
-        guard let fe = result.first else {
-
-            throw PhaseModelError(info: "", type: .EmptyModel)
-        }
-
-        func EndNodes(_ k:Int) -> (bottom:Int, top:Int)? {
-
-            guard !segments[k].isRadialShield, let bottom = bottomNode[segments[k].serialNumber], let top = topNode[segments[k].serialNumber] else {
-
-                return nil
+                result.append(nil)
             }
+            else if nextSegment.isStaticRing {
 
-            return (bottom, top)
-        }
+                let ringMid = (await nextSegment.z1 + nextSegment.z2) / 2.0
+                var nearest:(distance:Double, node:Int?) = (.infinity, nil)
 
-        for a in segments.indices {
+                for candidate in coilSegments where candidate.radialPos == nextSegment.radialPos {
 
-            guard let aNodes = EndNodes(a) else {
+                    let (z1, z2) = (await candidate.z1, await candidate.z2)
+                    let distance = ringMid > z2 ? ringMid - z2 : (ringMid < z1 ? z1 - ringMid : 0.0)
 
-                continue
-            }
+                    if distance < nearest.distance {
 
-            let toGround = fe.ToGround(a)
-            self.nodeStore[aNodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: toGround / 2.0))
-            self.nodeStore[aNodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: toGround / 2.0))
-
-            for b in segments.indices where b != a && segments[b].radialPos != segments[a].radialPos {
-
-                let capacitance = fe.Mutual(a, b)
-
-                if let bNodes = EndNodes(b) {
-
-                    // Each pair is visited from both sides, and each visit books its own side's half of the four entries.
-                    for aNode in [aNodes.bottom, aNodes.top] {
-
-                        for bNode in [bNodes.bottom, bNodes.top] {
-
-                            self.nodeStore[aNode].shuntCapacitances.append(Node.shuntCap(toNode: bNode, capacitance: capacitance / 4.0))
-                        }
+                        nearest = (distance, ringMid > (z1 + z2) / 2.0 ? topNode[candidate.serialNumber] : bottomNode[candidate.serialNumber])
                     }
                 }
-                else {
 
-                    self.nodeStore[aNodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
-                    self.nodeStore[aNodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
-                }
+                result.append(nearest.node.map({ [$0] }))
+            }
+            else if let bottom = bottomNode[nextSegment.serialNumber], let top = topNode[nextSegment.serialNumber] {
+
+                result.append([bottom, top])
+            }
+            else {
+
+                result.append(nil)
             }
         }
 
-        // The adjacent phase, by the overlap rule
-        let coilSegments = self.CoilSegments()
-
-        guard let lastCoilSeg = coilSegments.last else {
-
-            throw PhaseModelError(info: "", type: .EmptyModel)
-        }
-
-        let lastCoil = lastCoilSeg.radialPos
-        let outerTerms = try await self.OuterShuntCapacitance()
-
-        if outerTerms.adjacentPhase > 0.0 {
-
-            var outermost:[ShuntElectrode] = []
-
-            for nextSegment in coilSegments where nextSegment.radialPos == lastCoil {
-
-                guard let bottom = bottomNode[nextSegment.serialNumber], let top = topNode[nextSegment.serialNumber] else {
-
-                    throw PhaseModelError(info: "segment \(nextSegment.serialNumber) has no node at one of its ends", type: .UnresolvableConnector)
-                }
-
-                outermost.append(ShuntElectrode(z1: await nextSegment.z1, z2: await nextSegment.z2, nodes: (bottom, top)))
-            }
-
-            outermost.sort(by: { $0.z1 < $1.z1 })
-
-            let window = [ShuntElectrode(z1: 0.0, z2: windowHeight, nodes: nil)]
-            let outerH = try await self.EffectiveHeight(coil: lastCoil)
-            let gap = self.core.legCenters / 2.0 - (await lastCoilSeg.r2)
-            let coupling = PhaseModel.OverlapDecayCoupling(a: outermost, b: window, gap: gap, faradsPerMetre: outerTerms.adjacentPhase / outerH, zMin: 0.0, zMax: windowHeight)
-
-            for (pair, capacitance) in coupling where capacitance > 0.0 {
-
-                if let nodes = outermost[pair.a].nodes {
-
-                    self.nodeStore[nodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
-                    self.nodeStore[nodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
-                }
-            }
-        }
+        return result
     }
+
+    /// The enclosure the FE booking solves in: no yokes or tank, with the boundary 1 m beyond the window and the tank wall. The
+    /// SelfTest comparison checks that 1 m is far enough by solving at 0.5 m as well.
+    static let feShuntEnclosure = FeShuntReference.Enclosure.open(margin: 1.0)
 
     /// The outermost coil's shunt capacitance to everything outside it: the tank, and the outermost coil of the adjacent phase
     /// (per Kulkarni 7.15).

@@ -108,21 +108,21 @@ what happened when the interleaved path followed K&K 7.3.5 and dropped it: the r
 asymmetry, since the turn terms there are a dead heat. The shielded pair passes an `internalCddScale` below 1; an interleaved pair
 passes 1, because every turn in its discs is a coil turn.
 
-## The shunt terms have an electrostatic FE reference
+## The coil-to-coil shunt terms have an electrostatic FE reference
 
-`FeShuntReference` (in `FePhase.swift`) solves the whole Segment-to-Segment shunt matrix by axisymmetric electrostatic FE, using
-`PchAxiSymFE`'s `CapacitanceMatrixSolver`. Every Segment is an electrode. The core surface, both yokes and a coaxial tank at half
-the tank depth are grounded. Each hilo is filled with `PhaseModel.HiloRelativePermittivity`, the same factor
-`CoilInnerShuntCapacitance` uses. It is the reference the analytic bookings are judged against (TODO item 6d):
-`-PCH_SelfTestShuntFE YES` prints the comparison, and `-PCH_ShuntBooking fe` books C from it.
+`FeShuntReference` (in `FePhase.swift`) solves the Segment-to-Segment capacitance matrix by axisymmetric electrostatic FE, using
+`PchAxiSymFE`'s `CapacitanceMatrixSolver`. Every Segment is an electrode, static rings and shields included, and each hilo is filled
+with `PhaseModel.HiloRelativePermittivity`, the same factor `CoilInnerShuntCapacitance` uses. It is the reference the analytic
+bookings are judged against (TODO item 6d). `-PCH_SelfTestShuntFE YES` prints the comparison, and `-PCH_ShuntBooking fe` books the
+coil pairs from it.
 
-Three things in it are deliberate and look like bugs:
+What to know before using it:
 
-- **It gives coils ground capacitance that no analytic term has**: a coil end facing a yoke, and a coil's surface facing the tank
-  where no neighbour is in between. On S0747 that is 3.0e-10 F on the HV, against zero in either booking. It is the main reason the
-  two disagree.
-- **The outermost coil's ground term will not match `OuterShuntCapacitance`.** The FE tank is a coaxial cylinder, not Kulkarni's
-  cylinder beside a plane, and the FE has no adjacent phase. `-PCH_ShuntBooking fe` adds the phase back by the overlap rule.
+- **Coil pairs only.** Its yokes are plates over 100% of a coil's end and its tank is a cylinder, so anything ending on them is
+  overstated. No ground term is compared or booked from it. The `.window` and `.open` enclosures bracket what the yokes and tank do
+  to the coil pairs; on every fixture so far the two agree within 6%.
+- **A static ring's coupling belongs to its coil's end node** (`PhaseModel.ShuntElectrodeNodes`). The analytic booking ignores
+  rings, but they carry a large share of a shorter coil's end fringing: 13% of S0747's HV–RV coupling on each of the RV's two.
 - **The hilo is homogeneous, not tubes in oil**, so that FE and formula differ in geometry only. See 6d for why real tubes would
   have differed by about 1% on their own.
 

@@ -456,15 +456,26 @@ actor FePhase {
 ///
 /// # The model
 ///
-/// The same window as the magnetic model, with the boundaries read electrically: the core surface, both yokes and the tank wall
-/// are earthed metal, so all four faces of the (r, z) domain are grounded. Every Segment the model holds - coil Segments, static
-/// rings and radial shields alike - is one equipotential electrode on its live `rect`. Each hilo, and the gap from the outermost
-/// coil to the tank, is filled with the relative permittivity the analytic formula for that gap uses, so that the FE and the
-/// formulas differ in the geometry only. Everything else in the window is oil.
+/// Every Segment the model holds - coil Segments, static rings and radial shields alike - is one equipotential electrode on its
+/// live `rect`. Each hilo, and the gap from the outermost coil to the tank, is filled with the relative permittivity the analytic
+/// formula for that gap uses, so that the FE and the formulas differ in the geometry only. Everything else is oil. The core
+/// surface is always grounded: the leg is a real cylinder, and the coils wrap all the way round it.
 ///
-/// What it does not model, by construction: the adjacent phase, which is not axisymmetric and keeps its analytic term; and the
-/// tank as Kulkarni has it, a plane beside a cylinder, which here is a coaxial cylinder instead. The outermost coil's capacitance
-/// to the tank is therefore not expected to reproduce `OuterShuntCapacitance`, and a difference there is not a bug.
+/// # What to trust it for
+///
+/// **The capacitance between Segments of different coils, and nothing that ends on the yokes or the tank.** Axisymmetry makes a
+/// yoke a flat plate covering 100% of a coil's end, where the real one crosses it over a fraction of the circumference, and makes
+/// the tank a cylinder, where the real one is a box. Both overstate the ground capacitance - badly, at a coil end that stands
+/// proud of its neighbours. They also take some of the end fringing that would otherwise pass between two coils, so they bias the
+/// coil-to-coil terms low. `Enclosure` brackets that bias:
+///
+/// * `.window` grounds the yokes and the tank, the magnetic model's window read electrically: the most ground the real unit could
+///   have, so the least coil-to-coil fringing;
+/// * `.open` removes them. The domain runs `margin` past the window at both ends and past the tank, with the core leg continued
+///   through it, so the outer boundary stands in for infinity: no yokes or tank at all, so the most fringing.
+///
+/// Where the two agree, the yokes and tank do not matter to that pair. The adjacent phase is not axisymmetric and is not
+/// modelled in either.
 ///
 /// Pairs of Segments in the same coil come out of the solve as well. The caller should drop them: DelVecchio's series
 /// capacitance already accounts for the field between neighbouring discs.
@@ -540,6 +551,25 @@ enum FeShuntReference {
     static let elementsAcrossSection = 2
     static let maximumGapElementSize = 0.020
 
+    /// What surrounds the coils. See the type comment.
+    enum Enclosure: Sendable, CustomStringConvertible {
+
+        /// The core, both yokes and the tank, all grounded.
+        case window
+        /// The core leg only; the rest of the boundary is grounded `margin` metres beyond the window ends and the tank wall.
+        case open(margin: Double)
+
+        var description: String {
+
+            switch self {
+            case .window:
+                return "window (core, yokes, tank)"
+            case .open(let margin):
+                return String(format: "open, %.1f m margin", margin)
+            }
+        }
+    }
+
     /// Solves the capacitance matrix on the base mesh and then on `refinements` successively halved ones, for a convergence
     /// check. Each level is one factorization and one solve per electrode; a level costs about four times the one before.
     ///
@@ -549,6 +579,7 @@ enum FeShuntReference {
                       tankRadius: Double,
                       electrodes: [ElectrodeInput],
                       dielectrics: [DielectricInput],
+                      enclosure: Enclosure = .window,
                       refinements: Int = 0,
                       progress: (@Sendable (Int, Int, Int) -> Void)? = nil) throws -> [Result] {
 
@@ -570,10 +601,21 @@ enum FeShuntReference {
              material: Material(name: input.name, relativePermittivity: input.relativePermittivity))
         }
 
+        // The domain. With the core surface as the inner boundary the core is not meshed, so its window bounds only add grid
+        // lines; the grounded inner face runs the domain's full height either way, which in `.open` is the leg continued.
+        let margin: Double
+
+        switch enclosure {
+        case .window:
+            margin = 0.0
+        case .open(let m):
+            margin = m
+        }
+
         // `.fluxParallel` is the mesh's name for a Dirichlet face, which here is a grounded one.
         let geometry = TransformerGeometry(
             core: PchAxiSymFE.Core(radius: coreRadius, windowBottom: 0.0, windowTop: windowHeight),
-            tank: Tank(innerRadius: tankRadius, bottom: 0.0, top: windowHeight),
+            tank: Tank(innerRadius: tankRadius + margin, bottom: -margin, top: windowHeight + margin),
             sections: sections,
             insulationRegions: insulation,
             backgroundMaterial: Material(name: "oil", relativePermittivity: εOil),
