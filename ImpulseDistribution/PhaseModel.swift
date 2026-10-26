@@ -2111,6 +2111,8 @@ actor PhaseModel /*:Codable */ {
                 try await BookShuntCapacitancesByCapLink(coilTopNodes: coilTopNodes)
             case .overlap:
                 try await BookShuntCapacitancesByOverlap()
+            case .fe:
+                try await BookShuntCapacitancesByFE()
             }
             
             // At this point, all of the series and shunt capacitances have been calculated, so we can create the C-matrix. Note that at this point, the matrix has not taken into consideration any cross connections, nodal connections to ground, etc.
@@ -2432,6 +2434,10 @@ actor PhaseModel /*:Codable */ {
         /// Overlap-plus-decay: coupling booked disc pair by disc pair where the two conductors face each other, and decaying as
         /// exp(-π·d/g) where they do not. See `OverlapDecayCoupling`.
         case overlap
+        /// The electrostatic FE reference (TODO item 6d), booked Segment pair by Segment pair, with the adjacent phase added by
+        /// the overlap rule because the FE cannot represent it. An experiment, not a production path: it costs a mesh and a solve
+        /// per Segment every time C is built. See `BookShuntCapacitancesByFE`.
+        case fe
     }
 
     static var shuntBooking:ShuntBooking {
@@ -2762,6 +2768,138 @@ actor PhaseModel /*:Codable */ {
         }
     }
 
+    /// The shunt booking from the electrostatic FE reference (TODO item 6d), behind `-PCH_ShuntBooking fe`.
+    ///
+    /// The FE matrix is Segment to Segment, and is put on the nodes by the same split the other bookings use: a pair's
+    /// capacitance a quarter onto each of the four pairs of their end nodes, a Segment's capacitance to ground half onto each end
+    /// node. Pairs within one coil are dropped, since the series capacitance covers them. A radial shield is earthed and has no
+    /// nodes, so a Segment's capacitance to one is booked to ground; so is the capacitance to any other Segment without two end
+    /// nodes.
+    ///
+    /// The FE has the core, the yokes and a coaxial tank, but no adjacent phase: that term is added for the outermost coil by
+    /// the overlap rule, exactly as `BookShuntCapacitancesByOverlap` books it.
+    private func BookShuntCapacitancesByFE() async throws {
+
+        var bottomNode:[Int:Int] = [:]
+        var topNode:[Int:Int] = [:]
+
+        for nextNode in self.nodeStore {
+
+            if let above = nextNode.aboveSegment {
+
+                bottomNode[above.serialNumber] = nextNode.number
+            }
+
+            if let below = nextNode.belowSegment {
+
+                topNode[below.serialNumber] = nextNode.number
+            }
+        }
+
+        let segments = self.segments
+        let inputs = try await self.ElectrostaticReferenceInputs()
+        let coreRadius = self.core.radius
+        let windowHeight = self.core.realWindowHeight
+        let tankRadius = self.tankDepth / 2.0
+
+        // Off the actor: a mesh and a solve per Segment, a few seconds on a real winding.
+        let result = try await Task.detached {
+
+            try FeShuntReference.Solve(coreRadius: coreRadius, windowHeight: windowHeight, tankRadius: tankRadius, electrodes: inputs.electrodes, dielectrics: inputs.dielectrics)
+        }.value
+
+        guard let fe = result.first else {
+
+            throw PhaseModelError(info: "", type: .EmptyModel)
+        }
+
+        func EndNodes(_ k:Int) -> (bottom:Int, top:Int)? {
+
+            guard !segments[k].isRadialShield, let bottom = bottomNode[segments[k].serialNumber], let top = topNode[segments[k].serialNumber] else {
+
+                return nil
+            }
+
+            return (bottom, top)
+        }
+
+        for a in segments.indices {
+
+            guard let aNodes = EndNodes(a) else {
+
+                continue
+            }
+
+            let toGround = fe.ToGround(a)
+            self.nodeStore[aNodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: toGround / 2.0))
+            self.nodeStore[aNodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: toGround / 2.0))
+
+            for b in segments.indices where b != a && segments[b].radialPos != segments[a].radialPos {
+
+                let capacitance = fe.Mutual(a, b)
+
+                if let bNodes = EndNodes(b) {
+
+                    // Each pair is visited from both sides, and each visit books its own side's half of the four entries.
+                    for aNode in [aNodes.bottom, aNodes.top] {
+
+                        for bNode in [bNodes.bottom, bNodes.top] {
+
+                            self.nodeStore[aNode].shuntCapacitances.append(Node.shuntCap(toNode: bNode, capacitance: capacitance / 4.0))
+                        }
+                    }
+                }
+                else {
+
+                    self.nodeStore[aNodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+                    self.nodeStore[aNodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+                }
+            }
+        }
+
+        // The adjacent phase, by the overlap rule
+        let coilSegments = self.CoilSegments()
+
+        guard let lastCoilSeg = coilSegments.last else {
+
+            throw PhaseModelError(info: "", type: .EmptyModel)
+        }
+
+        let lastCoil = lastCoilSeg.radialPos
+        let outerTerms = try await self.OuterShuntCapacitance()
+
+        if outerTerms.adjacentPhase > 0.0 {
+
+            var outermost:[ShuntElectrode] = []
+
+            for nextSegment in coilSegments where nextSegment.radialPos == lastCoil {
+
+                guard let bottom = bottomNode[nextSegment.serialNumber], let top = topNode[nextSegment.serialNumber] else {
+
+                    throw PhaseModelError(info: "segment \(nextSegment.serialNumber) has no node at one of its ends", type: .UnresolvableConnector)
+                }
+
+                outermost.append(ShuntElectrode(z1: await nextSegment.z1, z2: await nextSegment.z2, nodes: (bottom, top)))
+            }
+
+            outermost.sort(by: { $0.z1 < $1.z1 })
+
+            let window = [ShuntElectrode(z1: 0.0, z2: windowHeight, nodes: nil)]
+            let outerH = try await self.EffectiveHeight(coil: lastCoil)
+            let gap = self.core.legCenters / 2.0 - (await lastCoilSeg.r2)
+            let coupling = PhaseModel.OverlapDecayCoupling(a: outermost, b: window, gap: gap, faradsPerMetre: outerTerms.adjacentPhase / outerH, zMin: 0.0, zMax: windowHeight)
+
+            for (pair, capacitance) in coupling where capacitance > 0.0 {
+
+                if let nodes = outermost[pair.a].nodes {
+
+                    self.nodeStore[nodes.bottom].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+                    self.nodeStore[nodes.top].shuntCapacitances.append(Node.shuntCap(toNode: -1, capacitance: capacitance / 2.0))
+                }
+            }
+        }
+    }
+
     /// The outermost coil's shunt capacitance to everything outside it: the tank, and the outermost coil of the adjacent phase
     /// (per Kulkarni 7.15).
     ///
@@ -2894,20 +3032,10 @@ actor PhaseModel /*:Codable */ {
             let rGap = prevIR + hilo / 2.0
             
             // TODO: This should probably be dependent on whether 'coil' is actually a radial shield
-            let Ns = Double(bs.wdgData.discData.numAxialColumns)
-            // assume 3/4" sticks
-            let ws = 0.75 * 0.0254
-            let fs = Ns * ws / (2 * π * rGap)
             let H = try await CapacitiveHeightInner(coil: coil)
-            // assume standard radial spacers & tube thicknesses
-            let Npress = round(hilo / 0.0084 - 0.5)
-            let tPress = 0.08 * 0.0254 * Npress
-            let tStick = hilo - tPress
+            let εHilo = PhaseModel.HiloRelativePermittivity(hilo: hilo, rGap: rGap, axialColumns: bs.wdgData.discData.numAxialColumns)
             
-            let firstTerm = fs / ((tPress / εBoard) + (tStick / εBoard))
-            let secondTerm = (1 - fs) / ((tPress / εBoard) + (tStick / εOil))
-            
-            let Cinner = ε0 * 2 * π * rGap * H * (firstTerm + secondTerm)
+            let Cinner = ε0 * 2 * π * rGap * H * εHilo / hilo
             
             return Cinner
         }
@@ -2915,6 +3043,134 @@ actor PhaseModel /*:Codable */ {
             
             throw error
         }
+    }
+    
+    /// The relative permittivity of a hilo gap as DV 12.61 is implemented here: the sticks (`axialColumns` of them, 3/4" wide)
+    /// run the full gap in pressboard, and beside them the gap is a series stack of `Npress` 0.08" pressboard tubes and oil. The
+    /// two paths are in parallel, by the fraction `fs` of the circumference the sticks cover:
+    ///
+    ///     ε_hilo = hilo · [ fs / (t_press/ε_board + t_stick/ε_board) + (1 − fs) / (t_press/ε_board + t_stick/ε_oil) ]
+    ///
+    /// which is the factor `CoilInnerShuntCapacitance` multiplies the planar `ε0·2π·rGap·H/hilo` by. Dimensionless.
+    ///
+    /// Pulled out so that the electrostatic FE reference (TODO item 6d) fills each hilo with exactly this value. The FE then
+    /// differs from the formula in the geometry alone - curvature, fringing and the coils' real heights - and not in how the
+    /// sticks and tubes are averaged. Placing the tubes as real cylinders would differ from this by about 1% even in a gap
+    /// with no fringing at all, because a smeared-stick oil layer in series with the tubes is not the same as two parallel
+    /// paths, and the tubes' radial positions are not in the design file anyway.
+    static func HiloRelativePermittivity(hilo:Double, rGap:Double, axialColumns:Int) -> Double {
+        
+        let Ns = Double(axialColumns)
+        // assume 3/4" sticks
+        let ws = 0.75 * 0.0254
+        let fs = Ns * ws / (2 * π * rGap)
+        // assume standard radial spacers & tube thicknesses
+        let Npress = round(hilo / 0.0084 - 0.5)
+        let tPress = 0.08 * 0.0254 * Npress
+        let tStick = hilo - tPress
+        
+        let firstTerm = fs / ((tPress / εBoard) + (tStick / εBoard))
+        let secondTerm = (1 - fs) / ((tPress / εBoard) + (tStick / εOil))
+        
+        return hilo * (firstTerm + secondTerm)
+    }
+    
+    /// The inputs to the electrostatic FE reference for the shunt matrix (TODO item 6d; the model is described on
+    /// `FeShuntReference`).
+    ///
+    /// - **Electrodes:** every Segment in `segments`, static rings and radial shields included, in that order, each on its live
+    ///   `rect`. `segments[k]` is electrode k.
+    /// - **Dielectrics:** one per hilo, and one from the outermost coil to the tank. A hilo runs radially from the inside
+    ///   neighbour's OD (the core surface for the innermost) to this coil's or shield's ID, and axially over the two sides'
+    ///   combined extent - the sticks and tubes run at least the length of the taller of the two. It is filled with
+    ///   `HiloRelativePermittivity`, the value `CoilInnerShuntCapacitance` uses for the same gap. The tank gap runs the full
+    ///   window height with `OuterShuntCapacitance`'s series oil/barrier factor.
+    ///
+    /// The gaps are measured from the geometry here rather than through `HiloUnder`, which works coil by coil and cannot be asked
+    /// about the shield over the core. On every gap `HiloUnder` can be asked about the two agree, since both take the inside
+    /// neighbour's OD; they part only where a coil's Segments differ in ID, where this takes the smallest so that a dielectric never
+    /// reaches into an electrode.
+    func ElectrostaticReferenceInputs() async throws -> (electrodes:[FeShuntReference.ElectrodeInput], dielectrics:[FeShuntReference.DielectricInput]) {
+        
+        var electrodes:[FeShuntReference.ElectrodeInput] = []
+        
+        for nextSegment in self.segments {
+            
+            let kind = nextSegment.isRadialShield ? "shield" : (nextSegment.isStaticRing ? "ring" : "coil")
+            electrodes.append(FeShuntReference.ElectrodeInput(name: "\(kind) \(nextSegment.radialPos) serial \(nextSegment.serialNumber)", r1: await nextSegment.r1, r2: await nextSegment.r2, z1: await nextSegment.z1, z2: await nextSegment.z2))
+        }
+        
+        // The radial layers - coils and radial shields - innermost first. Static rings are at their coil's ends and are not part
+        // of the gap.
+        struct Layer {
+            
+            let radialPos:Int
+            var r1:Double
+            var r2:Double
+            var z1:Double
+            var z2:Double
+            let axialColumns:Int
+        }
+        
+        var layers:[Int:Layer] = [:]
+        
+        for nextSegment in self.segments where !nextSegment.isStaticRing {
+            
+            let (r1, r2, z1, z2) = (await nextSegment.r1, await nextSegment.r2, await nextSegment.z1, await nextSegment.z2)
+            
+            if var layer = layers[nextSegment.radialPos] {
+                
+                layer.r1 = min(layer.r1, r1)
+                layer.r2 = max(layer.r2, r2)
+                layer.z1 = min(layer.z1, z1)
+                layer.z2 = max(layer.z2, z2)
+                layers[nextSegment.radialPos] = layer
+            }
+            else {
+                
+                // The stick count of the Segment CoilInnerShuntCapacitance reads it from: the first one in the layer.
+                let first = await self.SegmentAt(location: LocStruct(radial: nextSegment.radialPos, axial: 0)) ?? nextSegment
+                layers[nextSegment.radialPos] = Layer(radialPos: nextSegment.radialPos, r1: r1, r2: r2, z1: z1, z2: z2, axialColumns: first.basicSections[0].wdgData.discData.numAxialColumns)
+            }
+        }
+        
+        let ordered = layers.values.sorted(by: { $0.r1 < $1.r1 })
+        
+        guard let outermost = ordered.last else {
+            
+            throw PhaseModelError(info: "", type: .EmptyModel)
+        }
+        
+        var dielectrics:[FeShuntReference.DielectricInput] = []
+        
+        for (index, layer) in ordered.enumerated() {
+            
+            let inside = index > 0 ? ordered[index - 1] : nil
+            let innerSurface = inside?.r2 ?? self.core.radius
+            let hilo = layer.r1 - innerSurface
+            
+            guard hilo > 0.0 else {
+                
+                continue
+            }
+            
+            let εHilo = PhaseModel.HiloRelativePermittivity(hilo: hilo, rGap: innerSurface + hilo / 2.0, axialColumns: layer.axialColumns)
+            
+            dielectrics.append(FeShuntReference.DielectricInput(name: "hilo under \(layer.radialPos)", r1: innerSurface, r2: layer.r1, z1: min(layer.z1, inside?.z1 ?? layer.z1), z2: max(layer.z2, inside?.z2 ?? layer.z2), relativePermittivity: εHilo))
+        }
+        
+        // OuterShuntCapacitance's oil plus a 1/4" barrier, in series
+        let tankRadius = self.tankDepth / 2.0
+        let tSolid = 0.25 * 0.0254
+        let tOil = tankRadius - outermost.r2 - tSolid
+        
+        if tOil > 0.0 {
+            
+            let εTank = (tOil + tSolid) / ((tOil / εOil) + (tSolid / εBoard))
+            dielectrics.append(FeShuntReference.DielectricInput(name: "tank gap", r1: outermost.r2, r2: tankRadius, z1: 0.0, z2: self.core.realWindowHeight, relativePermittivity: εTank))
+        }
+        
+        return (electrodes, dielectrics)
     }
     
     // Calculate the height that will be used for the shunt capacitance calculation to the coil/shield/core that is radially "inside" to the given coil.

@@ -13,6 +13,12 @@ cp <design file>.txt ~/Library/Containers/com.huberistech.ImpulseDistribution/Da
 cat ~/Library/Containers/com.huberistech.ImpulseDistribution/Data/Documents/SelfTestReport-STME0999.txt
 ```
 
+Add `-PCH_SelfTestShuntFE YES` to solve the electrostatic FE reference for the shunt matrix and compare it with what the booking
+put on the nodes (TODO item 6d). It solves on two meshes, the second for convergence, which is 15 s on S0747 and 30 s on
+`S0747-shield`. It prints per coil pair the booked and FE totals, how far apart the two distributions are, every node's booked and
+FE value, and the nodes where they differ most. `-PCH_ShuntBooking capLink | overlap | fe` chooses the booking itself; `overlap`
+is the default.
+
 Add `-PCH_SelfTestTransient YES` for the frequency-domain sweep as well, and `-PCH_SelfTestGraphs YES` (which needs the transient)
 to **render the result graphs to PNGs** beside the report — `SelfTestGraph-<scenario>-axialStress.png`, `-radialStress.png` and,
 for every sheet or layer winding in the model, `-radialProfile-coil<n>.png`. All three come out of `StressProfileView`, which they

@@ -108,6 +108,24 @@ what happened when the interleaved path followed K&K 7.3.5 and dropped it: the r
 asymmetry, since the turn terms there are a dead heat. The shielded pair passes an `internalCddScale` below 1; an interleaved pair
 passes 1, because every turn in its discs is a coil turn.
 
+## The shunt terms have an electrostatic FE reference
+
+`FeShuntReference` (in `FePhase.swift`) solves the whole Segment-to-Segment shunt matrix by axisymmetric electrostatic FE, using
+`PchAxiSymFE`'s `CapacitanceMatrixSolver`. Every Segment is an electrode. The core surface, both yokes and a coaxial tank at half
+the tank depth are grounded. Each hilo is filled with `PhaseModel.HiloRelativePermittivity`, the same factor
+`CoilInnerShuntCapacitance` uses. It is the reference the analytic bookings are judged against (TODO item 6d):
+`-PCH_SelfTestShuntFE YES` prints the comparison, and `-PCH_ShuntBooking fe` books C from it.
+
+Three things in it are deliberate and look like bugs:
+
+- **It gives coils ground capacitance that no analytic term has**: a coil end facing a yoke, and a coil's surface facing the tank
+  where no neighbour is in between. On S0747 that is 3.0e-10 F on the HV, against zero in either booking. It is the main reason the
+  two disagree.
+- **The outermost coil's ground term will not match `OuterShuntCapacitance`.** The FE tank is a coaxial cylinder, not Kulkarni's
+  cylinder beside a plane, and the FE has no adjacent phase. `-PCH_ShuntBooking fe` adds the phase back by the overlap rule.
+- **The hilo is homogeneous, not tubes in oil**, so that FE and formula differ in geometry only. See 6d for why real tubes would
+  have differed by about 1% on their own.
+
 ## Other structural facts worth knowing before editing
 
 - **`DiscToDiscSeriesCapacitance` gaps are measured between *insulated* surfaces.** A disc's `z1`/`z2` are over-paper and a static ring's rect is its overall wrapped thickness (`stdStaticRingThickness`, 5/8"), so the gap handed in is pure key-spacer/oil and every solid layer is added separately. That is exactly why 12.52 uses τ_p and not 2τ_p for a disc-disc gap: each disc contributes half of its two-sided paper. It takes `innerRadius`/`outerRadius` as **explicit parameters** rather than reading them off the `BasicSection`, because a BasicSection carries the pristine design-file radii while the live geometry lives on the Segment — pass `self.r1`/`self.r2`.

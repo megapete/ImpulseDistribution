@@ -218,45 +218,100 @@ from `SegmentAt(radial: -coil)`. For a shield, that is the coil **outside** it, 
 `S0747-shield`. The LV-to-shield capacitance was 3.065e-9 F; it is now 1.346e-9 F. The HV results are unchanged, because the
 LV is grounded at both ends.
 
-#### 6d. NEXT UP: electrostatic FE reference for the shunt matrix
+#### 6d. Electrostatic FE reference for the shunt matrix — built and run 2026-10-26; the questions it raised are open
 
 The purpose: 6c's rule `exp(−π·d/g)` is a slot estimate. It is weakest at the tank (g = 467 mm on S0747), at aligned coil ends
-(the g/2π-per-end term), and across layered barrier/oil gaps. An axisymmetric electrostatic solve of S0747 gives the whole
-disc-to-disc and disc-to-ground matrix, fringing included. It is the reference for choosing g, or for replacing the rule
-outright. Compare it with the `SHUNT BOOKING` section of the SelfTest report.
+(the g/2π-per-end term), and across layered barrier/oil gaps. An axisymmetric electrostatic solve gives the whole Segment-to-Segment
+and Segment-to-ground matrix, fringing included, as the reference for choosing g or for replacing the rule outright.
 
-**What `PchAxiSymFE` (`../PchAxiSymFePackage`) lacks.** `ElectrostaticFormulation` supplies only the radial weight 2πεr; the
-claim that it is "a formulation swap" is not yet true.
+**What was built.**
 
-1. **The material coefficient is hard-wired to reluctivity** (`Assembler.swift:147`, `BorderedConstraint.swift:124`), and
-   `material.permittivity` is never read. The formulation needs to choose the coefficient as well as the weight. The magnetic
-   tests guard the refactor.
-2. **Electrode nodes.** `AxiSymMesh.dirichletNodes` is fixed when the mesh is built, from the domain boundary only. Each disc
-   needs to become an electrode, with every node on or inside its rectangle fixed. The mesher already puts grid lines on every
-   disc face.
-3. **One factorization, many excitations.** Factorize the free-node matrix once. For each electrode i, set V = 1 there and 0
-   on all others, ground and the other discs included. The right-hand side is −K_fc·V_c. That is about 110 solves on S0747.
-4. **Charge extraction by reaction**, Q_j = Σ over electrode j's nodes of (K·φ_i), using the full, unreduced K. This equals
-   φ_jᵀKφ_i in Galerkin form, so the matrix is symmetric for free. The energy method gives the same at N² times the cost.
-   Mutual capacitance is −C_ij; capacitance to ground is the row sum.
-5. **Tests:** coaxial cylinders against 2πεL/ln(b/a); two dielectric layers in series; symmetry; row sums; Richardson
-   convergence (`Validation/Richardson.swift`).
+- **`PchAxiSymFE`:** the formulation now chooses the material coefficient (`Formulation.stiffnessCoefficient(of:)`: ν for
+  magnetics, ε for electrostatics) as well as the radial weight. A new `CapacitanceMatrixSolver` treats each electrode's nodes as
+  constrained, factorizes the free block once, solves once per electrode, and takes the charge by reaction with the unreduced K.
+  The mesh's Dirichlet faces are the grounded enclosure. Tests in `CapacitanceTests.swift`: a coax against 2πεL/ln(b/a), two
+  dielectric layers in series (both to 1e-5), symmetry, Maxwell signs, refinement, and touching electrodes rejected. All 113
+  package tests pass, so the magnetic results did not move.
+- **The app:** `FeShuntReference` in `FePhase.swift` (the bridge; no package type leaks out of it), and
+  `PhaseModel.ElectrostaticReferenceInputs` (every Segment is an electrode, plus the dielectric regions).
+  `-PCH_SelfTestShuntFE YES` adds a `SHUNT MATRIX: ELECTROSTATIC FE REFERENCE` section after `SHUNT BOOKING`, solved on the base
+  mesh and once refined. `-PCH_ShuntBooking fe` books C from the FE (a third choice beside `overlap` and `capLink`), with the
+  adjacent phase still added by the overlap rule. That booking is an experiment; it costs a mesh and ~110 solves every time C is
+  built (3 s on S0747).
 
-**Modelling choices, made to match the analytic formulas so that only the geometry differs:**
+**One modelling choice differs from the plan above.** Each hilo is one homogeneous region with `HiloRelativePermittivity`, the
+factor now pulled out of `CoilInnerShuntCapacitance`. The plan was real pressboard tubes plus oil smeared with the sticks. That
+differs from the formula by about 1% even with no fringing at all, because a smeared layer in series with the tubes is not the same
+as the formula's two parallel paths. The tubes' radial positions are not in the design file either. With the homogeneous fill,
+FE and formula differ in geometry alone, which was the stated aim. The tank gap gets `OuterShuntCapacitance`'s oil/barrier factor
+over the full window height; everything else is oil.
 
-- Each Segment is one equipotential electrode, using its live `rect`.
-- Hilo sticks and radial spacers are smeared as fs·ε_board + (1 − fs)·ε_oil, as DV 12.61 is implemented.
-- The `Npress` barriers are real pressboard cylinders.
-- Core surface, yokes and tank are grounded.
-- The adjacent phase cannot be axisymmetric, so it keeps its analytic term.
-- The FE tank is a coaxial cylinder, not Kulkarni's cylinder-to-plane, so it will not reproduce `OuterShuntCapacitance`. That
-  difference is expected and is not a bug.
-- Pairs of discs in the same coil come out of the FE too, but they are dropped: DV's series capacitance already counts them.
+**Numerics.** S0747: 34k nodes, then 136k (3 s and 12 s). `-shield`: 63k, then 250k (6 s and 22 s). Every total of any size moves
+by less than 0.3% under refinement, and the matrix is symmetric to 3e-16.
 
-**The bridge** is `FePhase.swift`, the app's only point of contact with the package; read its header first. Two open
-questions for PCH: is the FE only a reference, or the eventual production source of the shunt terms, as it is for inductance?
-And one limitation shared with 6c: a continuous disc faces the inner coil with its inner turn, so the quarter-per-node-pair
-split is itself an approximation.
+**Results on S0747 (FE on the refined mesh; `-shield` is the same except where noted).**
+
+| | overlap (6c) | FE | FE / overlap | node distribution, TV distance |
+|---|---|---|---|---|
+| LV–HV | 3.025e-10 | 2.696e-10 | 0.89 | 0.075 |
+| HV–RV | 4.636e-10 | 5.562e-10 | 1.20 | 0.25 (HV side), 0.15 (RV side) |
+| HV to ground (core, yokes, tank) | 0 | 2.958e-10 | — | — |
+| `-shield`: HV to ground (shield included) | 3.671e-10 | 6.267e-10 | 1.71 | 0.19 |
+| RV to ground | 2.083e-10 (tank + phase) | 1.708e-10 (coaxial tank and yokes, no phase) | — | 0.15 |
+| LV to core | 1.953e-9 | 2.025e-9 | 1.04 | — |
+
+(TV distance is half the sum over nodes of |booked share − FE share|: 0 means the same distribution, 1 means no node in common.)
+
+**What it shows:**
+
+1. **The biggest term is one nothing books: the HV's own ground capacitance, 3.0e-10 F**, as large as its whole coupling to the LV.
+   About 1e-10 of it is in the top 144 mm of the HV, which stands proud of the RV (its top is at 929 mm, the HV's at 1074 mm). With
+   only oil between it and the tank (626 mm) and the top yoke (346 mm), it gets about 8e-12 F per node, against 2e-13 F a few discs
+   lower, where the RV shields it. A free coil end acts like a torus: a rough torus-to-infinity estimate for that 144 mm gives
+   9e-11 F. The coax-per-metre picture every analytic term is built on has no end term at all. A smaller share sits on the bottom
+   three discs, 61 mm above the bottom yoke, next to the grounded end. Only the outermost coil gets any ground term from the
+   booking. A coil's ends, and any surface of it not facing a neighbour, get nothing.
+2. **LV–HV is 11% below the overlap rule and 5% below the plain formula** (2.831e-10 at H = 974 mm). With a 178 mm hilo and the
+   yokes 61 mm from the coil ends, the field at the ends goes to the yokes instead of across the hilo. So the g/2π-per-aligned-end
+   term 6c adds is the wrong sign here. The distribution along the HV is right (TV 0.075).
+3. **HV–RV sits between the two bookings:** 1.20× overlap, 0.83× `capLink`. The FE puts 4–5e-11 F on each of the RV's gap-edge
+   nodes (94–97), twice what overlap books, and 6e-12 on its outer ends (79, 112), a third of what overlap books. The RV's gap
+   faces see more of the HV than exp(−πd/g) allows, and its outer ends see less, because the yokes and the tank take the field
+   there.
+4. **Effect on the initial distribution (`-PCH_ShuntBooking fe` against `overlap`):**
+
+| | S0747 overlap | S0747 FE | `-shield` overlap | `-shield` FE |
+|---|---|---|---|---|
+| line-end gradient | 7.02× | **9.45×** | 7.42× | **9.73×** |
+| HV node 55 / centre node 40 | 0.295 / 0.161 | 0.234 / 0.114 | 0.275 / 0.147 | 0.220 / 0.104 |
+| HV node 77 (one disc below the line) | 0.926 | 0.900 | 0.922 | 0.897 |
+| RV outer ends (79, 112) | 0.176 | 0.123 | 0.165 | 0.117 |
+
+   The gradient rise is what the totals predict: the HV's effective capacitance to ground goes from 3.0e-10 to 5.7e-10 F, and
+   √(5.7/3.0) ≈ 1.37. The transient (worst section kV) has not been run with the FE booking.
+
+5. **The control, STME0999** (a plain two-winding design, no gaps): the formulas hold where the geometry is what they assume.
+   LV–HV is 1.426e-9 F by FE against 1.384e-9 booked (+3%), LV–core is +4%, and the two distributions are nearly identical
+   (TV 0.006 and 0.022). The HV's ground term is 3.36e-10 by FE, against 4.73e-10 booked for tank and phase together. The FE puts
+   it on the HV's two end discs (9.2% of it on one node), where the booking spreads it evenly. With `-PCH_ShuntBooking fe` the
+   line-end gradient goes from 31.6× to 35.2× (+11%): the same end effect as on S0747, smaller because no coil end stands proud
+   of a neighbour.
+
+**Open, for PCH:**
+
+- **Is the HV's end capacitance real on the unit?** The FE has an idealized enclosure: the core, two flat yokes and a coaxial tank
+  at half the tank depth. The real top end has clamping structure, leads and end insulation (pressboard, εr ≈ 4.5, not oil). The
+  real tank is a box, and the adjacent phases are grounded in the test, all of which add ground capacitance rather than remove it.
+  The size of the effect (+35% gradient) means it should be settled before trusting either booking's line-end numbers on a design
+  whose impulsed coil stands proud of its neighbours.
+- **Reference or production?** The FE booking runs in 3 s and needs no calibrated constant, and it is now one launch argument away.
+  But it is the only booking that gives a coil end its ground term. Switching to it changes S0747's line-end gradient by a third,
+  which is a decision about the physics, not the code. If it stays a reference, the analytic rule needs an end term: a coil end to a
+  yoke, and a coil's free surface to the tank.
+- **`capLink` stays** until that is settled (6c said to delete it once the FE had spoken). The FE agrees with neither booking
+  closely enough to choose between them on totals alone.
+- Still shared with 6c: a continuous disc faces the inner coil with its inner turn, so splitting a quarter onto each node pair is
+  itself an approximation. The FE booking inherits it.
 
 ## Dielectric stress screen
 

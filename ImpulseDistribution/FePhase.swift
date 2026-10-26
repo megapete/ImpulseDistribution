@@ -450,3 +450,164 @@ actor FePhase {
         return twicePeakEnergy / 2
     }
 }
+
+/// The electrostatic side of the phase: the segment-to-segment shunt capacitance matrix, fringing included, as a reference for
+/// the analytic shunt booking (TODO item 6d).
+///
+/// # The model
+///
+/// The same window as the magnetic model, with the boundaries read electrically: the core surface, both yokes and the tank wall
+/// are earthed metal, so all four faces of the (r, z) domain are grounded. Every Segment the model holds - coil Segments, static
+/// rings and radial shields alike - is one equipotential electrode on its live `rect`. Each hilo, and the gap from the outermost
+/// coil to the tank, is filled with the relative permittivity the analytic formula for that gap uses, so that the FE and the
+/// formulas differ in the geometry only. Everything else in the window is oil.
+///
+/// What it does not model, by construction: the adjacent phase, which is not axisymmetric and keeps its analytic term; and the
+/// tank as Kulkarni has it, a plane beside a cylinder, which here is a coaxial cylinder instead. The outermost coil's capacitance
+/// to the tank is therefore not expected to reproduce `OuterShuntCapacitance`, and a difference there is not a bug.
+///
+/// Pairs of Segments in the same coil come out of the solve as well. The caller should drop them: DelVecchio's series
+/// capacitance already accounts for the field between neighbouring discs.
+///
+/// Like `FePhase`, nothing here names a `PchAxiSymFE` type in its interface, so that callers need not import the package and its
+/// `Core`.
+enum FeShuntReference {
+
+    /// One electrode, in metres, with z measured up from the bottom yoke.
+    struct ElectrodeInput: Sendable {
+
+        let name: String
+        let r1: Double
+        let r2: Double
+        let z1: Double
+        let z2: Double
+    }
+
+    /// A region of uniform relative permittivity. Later entries win where two overlap; electrodes win over all of them.
+    struct DielectricInput: Sendable {
+
+        let name: String
+        let r1: Double
+        let r2: Double
+        let z1: Double
+        let z2: Double
+        let relativePermittivity: Double
+    }
+
+    /// The capacitance matrix on one mesh.
+    struct Result: Sendable {
+
+        /// `maxwell[j][i]` is the charge on electrode `j`, coulombs, with electrode `i` at 1 V and everything else at 0 V.
+        let maxwell: [[Double]]
+        let nodeCount: Int
+        let seconds: Double
+
+        /// The capacitance between electrodes `i` and `j`, F.
+        func Mutual(_ i: Int, _ j: Int) -> Double {
+
+            return -0.5 * (maxwell[i][j] + maxwell[j][i])
+        }
+
+        /// Electrode `i`'s capacitance to the grounded core, yokes and tank, F.
+        func ToGround(_ i: Int) -> Double {
+
+            return maxwell[i].reduce(0.0, +)
+        }
+
+        /// `max |C_ij − C_ji| / max C_ii`: the extraction is symmetric in exact arithmetic, so this is the solver's round-off.
+        var asymmetry: Double {
+
+            var worst = 0.0
+            var scale = 0.0
+
+            for i in maxwell.indices {
+
+                scale = max(scale, abs(maxwell[i][i]))
+
+                for j in 0..<i {
+
+                    worst = max(worst, abs(maxwell[i][j] - maxwell[j][i]))
+                }
+            }
+
+            return scale > 0.0 ? worst / scale : 0.0
+        }
+    }
+
+    /// Mesh sizing. The magnetic model's values: two elements across a section, which is all an equipotential needs (its
+    /// interior is not even solved for), and 20 mm at most in the oil. Every electrode face and every dielectric boundary is a
+    /// grid line whatever these say, and the gaps are graded down to the electrodes' element size at their faces.
+    static let elementsAcrossSection = 2
+    static let maximumGapElementSize = 0.020
+
+    /// Solves the capacitance matrix on the base mesh and then on `refinements` successively halved ones, for a convergence
+    /// check. Each level is one factorization and one solve per electrode; a level costs about four times the one before.
+    ///
+    /// - parameter progress: called with (level, electrodes done, electrodes in all), from whatever thread the solver is on.
+    static func Solve(coreRadius: Double,
+                      windowHeight: Double,
+                      tankRadius: Double,
+                      electrodes: [ElectrodeInput],
+                      dielectrics: [DielectricInput],
+                      refinements: Int = 0,
+                      progress: (@Sendable (Int, Int, Int) -> Void)? = nil) throws -> [Result] {
+
+        // An electrode is a section to the mesher - that is what puts grid lines on its faces - and its material is never read,
+        // because no node inside it is solved for.
+        let sections = electrodes.enumerated().map { (index, input) in
+
+            CoilSection(name: input.name,
+                        bounds: Rect(rMin: input.r1, rMax: input.r2, zMin: input.z1, zMax: input.z2),
+                        turns: 1,
+                        terminal: index,
+                        material: Material(name: input.name))
+        }
+
+        let insulation = dielectrics.map { input in
+
+            (name: input.name,
+             bounds: Rect(rMin: input.r1, rMax: input.r2, zMin: input.z1, zMax: input.z2),
+             material: Material(name: input.name, relativePermittivity: input.relativePermittivity))
+        }
+
+        // `.fluxParallel` is the mesh's name for a Dirichlet face, which here is a grounded one.
+        let geometry = TransformerGeometry(
+            core: PchAxiSymFE.Core(radius: coreRadius, windowBottom: 0.0, windowTop: windowHeight),
+            tank: Tank(innerRadius: tankRadius, bottom: 0.0, top: windowHeight),
+            sections: sections,
+            insulationRegions: insulation,
+            backgroundMaterial: Material(name: "oil", relativePermittivity: εOil),
+            innerBoundary: .coreSurface,
+            boundaryConditions: DomainBoundaryConditions(innerRadial: .fluxParallel,
+                                                         tankWall: .fluxParallel,
+                                                         tankBottom: .fluxParallel,
+                                                         tankTop: .fluxParallel))
+
+        let sizing = MeshSizing(elementsAcrossSectionRadially: elementsAcrossSection,
+                                elementsAlongSectionAxially: elementsAcrossSection,
+                                maximumGapElementSize: maximumGapElementSize,
+                                gradeGapsTowardConductors: true)
+
+        var mesh = try MeshBuilder(geometry: geometry, sizing: sizing).build(family: .t6)
+        var results: [Result] = []
+
+        for level in 0...max(0, refinements) {
+
+            if level > 0 {
+
+                mesh = try mesh.refined()
+            }
+
+            let start = Date()
+            let solver = CapacitanceMatrixSolver(mesh: mesh, geometry: geometry)
+            let matrix = try solver.solve { done, total in
+
+                progress?(level, done, total)
+            }
+
+            results.append(Result(maxwell: matrix.maxwell, nodeCount: mesh.nodeCount, seconds: Date().timeIntervalSince(start)))
+        }
+
+        return results
+    }
+}

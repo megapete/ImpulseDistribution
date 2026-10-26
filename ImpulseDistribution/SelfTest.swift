@@ -84,6 +84,9 @@ enum SelfTest {
     /// Set this to render the result graphs to PNGs beside the report, so that a drawing change can be LOOKED at without a
     /// keyboard. Needs the transient, since the graphs are of its findings.
     static let graphsKey = "PCH_SelfTestGraphs"
+    /// Set this to solve the electrostatic FE reference for the shunt matrix and compare the booking against it (TODO item 6d).
+    /// Opt-in because it is one solve per Segment, on two meshes for the convergence check.
+    static let shuntFEKey = "PCH_SelfTestShuntFE"
     /// A one-line summary of the run, in UserDefaults.
     static let summaryKey = "PCH_SelfTestSummary"
     /// The last stage the run reached, flushed before each step so that a hang can be located.
@@ -1328,6 +1331,13 @@ enum SelfTest {
         // S0747-shield) in place - see the note above SetNodes.
         text += await ShuntBookingReport(model: model)
 
+        if UserDefaults.standard.bool(forKey: shuntFEKey) {
+
+            Stage("solving the electrostatic FE reference for the shunt matrix")
+
+            text += await ShuntFEReport(model: model)
+        }
+
         Stage("solving the initial distribution")
 
         guard let snapshot = await simModel.Snapshot() else {
@@ -2410,44 +2420,8 @@ enum SelfTest {
 
         var text = "SHUNT BOOKING: \(PhaseModel.shuntBooking.rawValue)\n"
 
-        let nodes = await model.nodes
-
-        var coilOfNode:[Int:Int] = [:]
-
-        for nextNode in nodes {
-
-            if let radial = nextNode.aboveSegment?.radialPos ?? nextNode.belowSegment?.radialPos {
-
-                coilOfNode[nextNode.number] = radial
-            }
-        }
-
-        // (coil, other coil or -1 for ground) -> the total, and the per-node totals on `coil`'s side
-        struct Key: Hashable { let coil:Int; let other:Int }
-        var total:[Key:Double] = [:]
-        var perNode:[Key:[Int:Double]] = [:]
-
-        for nextNode in nodes {
-
-            guard let coil = coilOfNode[nextNode.number] else {
-
-                continue
-            }
-
-            for nextCap in nextNode.shuntCapacitances {
-
-                let other = nextCap.toNode < 0 ? -1 : (coilOfNode[nextCap.toNode] ?? -1)
-
-                guard other != coil else {
-
-                    continue
-                }
-
-                let key = Key(coil: coil, other: other)
-                total[key, default: 0.0] += nextCap.capacitance
-                perNode[key, default: [:]][nextNode.number, default: 0.0] += nextCap.capacitance
-            }
-        }
+        let perNode = await BookedShunt(model: model)
+        let total = perNode.mapValues({ $0.values.reduce(0.0, +) })
 
         for key in total.keys.sorted(by: { ($0.coil, $0.other) < ($1.coil, $1.other) }) {
 
@@ -2486,6 +2460,262 @@ enum SelfTest {
         if let outer = try? await model.OuterShuntCapacitance() {
 
             text += "    OuterShuntCapacitance: tank \(Farads(outer.tank)), adjacent phase \(Farads(outer.adjacentPhase))\n"
+        }
+
+        return text + "\n"
+    }
+
+    /// A coil-to-coil (or coil-to-ground, `other` = -1) pairing of shunt capacitance, seen from `coil`'s side.
+    private struct ShuntKey: Hashable { let coil:Int; let other:Int }
+
+    /// The shunt capacitances booked onto the nodes, by coil pair, as the total on each of `coil`'s nodes. A node belongs to the
+    /// coil of the Segment above it, or failing that the one below; pairs within a coil are left out.
+    private static func BookedShunt(model:PhaseModel) async -> [ShuntKey:[Int:Double]] {
+
+        let nodes = await model.nodes
+
+        var coilOfNode:[Int:Int] = [:]
+
+        for nextNode in nodes {
+
+            if let radial = nextNode.aboveSegment?.radialPos ?? nextNode.belowSegment?.radialPos {
+
+                coilOfNode[nextNode.number] = radial
+            }
+        }
+
+        var perNode:[ShuntKey:[Int:Double]] = [:]
+
+        for nextNode in nodes {
+
+            guard let coil = coilOfNode[nextNode.number] else {
+
+                continue
+            }
+
+            for nextCap in nextNode.shuntCapacitances {
+
+                let other = nextCap.toNode < 0 ? -1 : (coilOfNode[nextCap.toNode] ?? -1)
+
+                guard other != coil else {
+
+                    continue
+                }
+
+                perNode[ShuntKey(coil: coil, other: other), default: [:]][nextNode.number, default: 0.0] += nextCap.capacitance
+            }
+        }
+
+        return perNode
+    }
+
+    /// TODO item 6d: the electrostatic FE reference for the shunt matrix, against what the booking put on the nodes.
+    ///
+    /// The FE matrix is Segment to Segment. To compare it with the booking it is put onto the nodes by the booking's own rule - a
+    /// Segment pair's capacitance a quarter onto each of the four pairs of their end nodes, a Segment's capacitance to ground half
+    /// onto each end node - so that any difference left is in WHICH Segments couple and by how much, not in the split. A radial
+    /// shield has no nodes; it is earthed in this program, so a Segment's capacitance to it counts as ground, as in the booking.
+    /// Same-coil pairs are dropped (DelVecchio's series capacitance covers them).
+    ///
+    /// For each coil pair it prints the two totals, each side's largest single node, and the total-variation distance between the
+    /// two distributions: half the sum over nodes of |booked share − FE share|, 0 when the booking puts every node's share where the
+    /// FE does and 1 when the two have no node in common. Then the nodes where the two differ most.
+    ///
+    /// The FE is solved on the base mesh and once refined; the change between the two is printed, as the honest error bar.
+    private static func ShuntFEReport(model:PhaseModel) async -> String {
+
+        var text = "SHUNT MATRIX: ELECTROSTATIC FE REFERENCE (TODO 6d)\n"
+        text += String(repeating: "-", count: 110) + "\n"
+
+        let inputs:(electrodes:[FeShuntReference.ElectrodeInput], dielectrics:[FeShuntReference.DielectricInput])
+        let levels:[FeShuntReference.Result]
+
+        do {
+
+            inputs = try await model.ElectrostaticReferenceInputs()
+            let core = await model.core
+            let tankRadius = await model.tankDepth / 2.0
+            let electrodes = inputs.electrodes
+            let dielectrics = inputs.dielectrics
+
+            // Off the actor: two meshes and a few hundred solves.
+            levels = try await Task.detached {
+
+                try FeShuntReference.Solve(coreRadius: core.radius, windowHeight: core.realWindowHeight, tankRadius: tankRadius, electrodes: electrodes, dielectrics: dielectrics, refinements: 1)
+            }.value
+        }
+        catch {
+
+            return text + "  FAILED: \(error)\n\n"
+        }
+
+        for nextDielectric in inputs.dielectrics {
+
+            text += String(format: "  dielectric %@: r %.1f-%.1f mm, z %.1f-%.1f mm, eps_r %.4f\n", nextDielectric.name, nextDielectric.r1 * 1000.0, nextDielectric.r2 * 1000.0, nextDielectric.z1 * 1000.0, nextDielectric.z2 * 1000.0, nextDielectric.relativePermittivity)
+        }
+
+        for (level, result) in levels.enumerated() {
+
+            text += String(format: "  mesh %d: %d nodes, %d electrodes, %.1f s, asymmetry %.2e\n", level, result.nodeCount, inputs.electrodes.count, result.seconds, result.asymmetry)
+        }
+
+        // Segment k of `segments` is electrode k. Its end nodes, as BookShuntCapacitancesByOverlap finds them.
+        let segments = await model.segments
+        let nodes = await model.nodes
+        var bottomNode:[Int:Int] = [:]
+        var topNode:[Int:Int] = [:]
+
+        for nextNode in nodes {
+
+            if let above = nextNode.aboveSegment {
+
+                bottomNode[above.serialNumber] = nextNode.number
+            }
+
+            if let below = nextNode.belowSegment {
+
+                topNode[below.serialNumber] = nextNode.number
+            }
+        }
+
+        func EndNodes(_ k:Int) -> [Int]? {
+
+            let segment = segments[k]
+
+            guard !segment.isRadialShield, let bottom = bottomNode[segment.serialNumber], let top = topNode[segment.serialNumber] else {
+
+                return nil
+            }
+
+            return [bottom, top]
+        }
+
+        func PerNode(_ result:FeShuntReference.Result) -> [ShuntKey:[Int:Double]] {
+
+            var perNode:[ShuntKey:[Int:Double]] = [:]
+
+            for a in segments.indices {
+
+                guard let aNodes = EndNodes(a) else {
+
+                    continue
+                }
+
+                let coilA = segments[a].radialPos
+
+                for aNode in aNodes {
+
+                    perNode[ShuntKey(coil: coilA, other: -1), default: [:]][aNode, default: 0.0] += result.ToGround(a) / 2.0
+                }
+
+                for b in segments.indices where b != a && segments[b].radialPos != coilA {
+
+                    let c = result.Mutual(a, b)
+
+                    if let bNodes = EndNodes(b) {
+
+                        // a quarter to each of the four node pairs, so half of it on each of a's nodes
+                        for aNode in aNodes {
+
+                            perNode[ShuntKey(coil: coilA, other: segments[b].radialPos), default: [:]][aNode, default: 0.0] += c / 2.0
+                        }
+                    }
+                    else {
+
+                        for aNode in aNodes {
+
+                            perNode[ShuntKey(coil: coilA, other: -1), default: [:]][aNode, default: 0.0] += c / 2.0
+                        }
+                    }
+                }
+            }
+
+            return perNode
+        }
+
+        let booked = await BookedShunt(model: model)
+        let fe = levels.map({ PerNode($0) })
+
+        guard let finest = fe.last else {
+
+            return text + "\n"
+        }
+
+        let keys = Set(booked.keys).union(finest.keys).sorted(by: { ($0.coil, $0.other) < ($1.coil, $1.other) })
+
+        text += "\n  pair                 booked          FE mesh 0       FE mesh 1       FE/booked  refine   TV dist  largest node: booked / FE\n"
+
+        var worstNodes:[(key:ShuntKey, node:Int, booked:Double, fe:Double)] = []
+
+        for key in keys {
+
+            let b = booked[key] ?? [:]
+            let f = finest[key] ?? [:]
+            let bSum = b.values.reduce(0.0, +)
+            let fSums = fe.map({ ($0[key] ?? [:]).values.reduce(0.0, +) })
+            let fSum = fSums.last ?? 0.0
+
+            var tv = 0.0
+
+            for node in Set(b.keys).union(f.keys) {
+
+                let bShare = bSum > 0.0 ? (b[node] ?? 0.0) / bSum : 0.0
+                let fShare = fSum > 0.0 ? (f[node] ?? 0.0) / fSum : 0.0
+                tv += abs(bShare - fShare) / 2.0
+                worstNodes.append((key, node, b[node] ?? 0.0, f[node] ?? 0.0))
+            }
+
+            func Largest(_ dist:[Int:Double], _ sum:Double) -> String {
+
+                guard let largest = dist.max(by: { $0.value < $1.value }), sum > 0.0 else {
+
+                    return "-"
+                }
+
+                return String(format: "%d (%.1f%%)", largest.key, 100.0 * largest.value / sum)
+            }
+
+            let pairName = "\(key.coil) to " + (key.other < 0 ? "ground" : "\(key.other)")
+            let refine = fSums.count > 1 && fSum > 0.0 ? String(format: "%+.2f%%", 100.0 * (fSum - fSums[0]) / fSum) : "-"
+            text += pairName.padding(toLength: 21, withPad: " ", startingAt: 0)
+            text += String(format: "%.4e  ", bSum)
+            text += fSums.map({ String(format: "%.4e  ", $0) }).joined()
+            text += String(format: "%7.3f  %7@  %6.3f   %@ / %@\n", bSum > 0.0 ? fSum / bSum : 0.0, refine, tv, Largest(b, bSum), Largest(f, fSum))
+        }
+
+        text += "\n  The FE has no adjacent phase, so the outermost coil's \"to ground\" compares the booking's tank PLUS phase against an FE\n"
+        text += "  tank alone, and a coaxial tank at that (see FeShuntReference). The other pairs are like for like.\n"
+
+        // Every node, for the pairs that have one: where along each coil the coupling sits, booked against FE.
+        text += "\n  per node, booked / FE (finest mesh), F:\n"
+
+        let zOfNode = Dictionary(nodes.map({ ($0.number, $0.z) }), uniquingKeysWith: { first, _ in first })
+        let coilOfNode = Dictionary(keys.flatMap({ key in Array(Set((booked[key] ?? [:]).keys).union((finest[key] ?? [:]).keys)).map({ ($0, key.coil) }) }), uniquingKeysWith: { first, _ in first })
+
+        for coil in Array(Set(coilOfNode.values)).sorted() {
+
+            let coilKeys = keys.filter({ $0.coil == coil })
+            text += "    coil \(coil)   node     z (mm)" + coilKeys.map({ "   " + ("to " + ($0.other < 0 ? "ground" : "coil \($0.other)")).padding(toLength: 23, withPad: " ", startingAt: 0) }).joined() + "\n"
+
+            for node in coilOfNode.filter({ $0.value == coil }).keys.sorted() {
+
+                text += String(format: "            %5d  %9.3f", node, (zOfNode[node] ?? .nan) * 1000.0)
+
+                for key in coilKeys {
+
+                    text += String(format: "   %.3e / %.3e", booked[key]?[node] ?? 0.0, finest[key]?[node] ?? 0.0)
+                }
+
+                text += "\n"
+            }
+        }
+
+        text += "\n  nodes where booked and FE differ most (finest mesh):\n"
+
+        for worst in worstNodes.sorted(by: { abs($0.booked - $0.fe) > abs($1.booked - $1.fe) }).prefix(15) {
+
+            let pairName = "\(worst.key.coil) to " + (worst.key.other < 0 ? "ground" : "\(worst.key.other)")
+            text += String(format: "    node %4d  %@  booked %.4e  FE %.4e  (%+.4e)\n", worst.node, pairName.padding(toLength: 12, withPad: " ", startingAt: 0), worst.booked, worst.fe, worst.booked - worst.fe)
         }
 
         return text + "\n"
