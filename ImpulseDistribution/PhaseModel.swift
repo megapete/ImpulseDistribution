@@ -2576,7 +2576,10 @@ actor PhaseModel /*:Codable */ {
             throw PhaseModelError(info: "\(coil)", type: .CoilDoesNotExist)
         }
         
-        let coilSections = self.CoilSegments().filter({$0.radialPos == coil})
+        // Static rings share their coil's radialPos and must not stretch its height, but a radial shield is asked for by its own
+        // (negative) radialPos - CalculateCapacitanceMatrix does exactly that through RadialShieldOutside - so it has to be found
+        // here. CoilSegments() drops both kinds, and on a shield came back empty and trapped on coilSections[0].
+        let coilSections = self.segmentStore.filter({ $0.radialPos == coil && !$0.isStaticRing })
         let coilBottom = await coilSections[0].z1
         let coilTop = await coilSections.last!.z2
         let coilHeight = coilTop - coilBottom

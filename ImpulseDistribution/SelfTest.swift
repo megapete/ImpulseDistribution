@@ -143,6 +143,9 @@ enum SelfTest {
         case remove(Jumper)
         /// Click a lead in *Add Ground* / *Add Impulse* mode.
         case terminate(Termination)
+        /// *Add Radial Shield* on a coil, with `gap` metres from the coil's ID to the shield. A port of `doAddRadialShield`, which
+        /// inserts the shield and recalculates nothing - the next simulation is the first thing to see it.
+        case radialShield(coil:Int, gap:Double)
     }
 
     /// Where a paralleled tap winding is tied to the HV neutral.
@@ -409,8 +412,44 @@ enum SelfTest {
         // jumper between the two centremost discs, which is the only way to make it. See T0239LTC. "bridged" ties the two new
         // leads straight back together (no taps in circuit); "full" puts the whole tap winding in series between them.
         "T0239-ltc-bridged" : T0239LTC(name: "T0239-ltc-bridged", tapsInCircuit: false),
-        "T0239-ltc-full" : T0239LTC(name: "T0239-ltc-full", tapsInCircuit: true)
+        "T0239-ltc-full" : T0239LTC(name: "T0239-ltc-full", tapsInCircuit: true),
+
+        "S0747-shield" : S0747(name: "S0747-shield", shieldGap: 0.15),
+        "S0747" : S0747(name: "S0747", shieldGap: nil)
     ]
+
+    /// The S0747 fixture: a 12-turn LV sheet (coil 0), a 76-disc HV (coil 1) and a 32-disc RV (coil 2), wired with no taps in
+    /// circuit - the HV's centre crossover left in place and carried to the RV's centre crossover - and, optionally, a radial ground
+    /// shield added inside the HV last, the way it was when the simulation crashed (reported 2026-10-26).
+    private static func S0747(name:String, shieldGap:Double?) -> Scenario {
+
+        // Neither coil has a tapping gap in the model - the HV's 76 mm centre gap is series-connected - so each centre is the
+        // crossover between its two middle discs: 38/39 on the HV, 16/17 on the RV.
+        var edits:[Edit] = [.jumper(Jumper(from: .discCrossover(coil: 1, disc: 38), to: .gapLead(coil: 2, gap: 0, side: .bottom)))]
+
+        if let gap = shieldGap {
+
+            edits.append(.radialShield(coil: 1, gap: gap))
+        }
+
+        return Scenario(name: name,
+                        restructure: .none,
+                        matchedBuild: nil,
+                        fixtureName: "S0747_AndIn.txt",
+                        notes: "LV grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded, HV centre crossover tied to the RV centre crossover." + (shieldGap == nil ? "" : " Radial ground shield inside the HV."),
+                        jumpers: [],
+                        terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 0, end: .top), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .top), type: .impulse)],
+                        edits: edits,
+                        waveFormType: .FullWave,
+                        peakVoltage: 550.0e3,
+                        displaySpan: 100.0e-6,
+                        bandwidth: 10.0e6,
+                        continuumCoil: 1,
+                        reportNodes: true)
+    }
 
     /// The T0239 fixture: a 600Y LV sheet (coil 0), a 13.1 kV delta HV of 40 continuous discs (coil 1), and a 24-disc
     /// double-stacked tapping winding (coil 2) for an on-load tap changer.
@@ -2145,6 +2184,20 @@ enum SelfTest {
         case .terminate(let termination):
 
             return await ApplyTermination(termination, model: model)
+
+        case .radialShield(let coil, let gap):
+
+            do {
+
+                let shield = try await model.AddRadialShieldInside(coil: coil, hiloToShield: gap)
+                try await model.InsertSegment(newSegment: shield)
+
+                return String(format: "radial shield inside coil %d, %.1f mm from its ID (radialPos %d)", coil, gap * 1000.0, shield.radialPos)
+            }
+            catch {
+
+                return "FAILED adding a radial shield inside coil \(coil): \(error)"
+            }
         }
     }
 

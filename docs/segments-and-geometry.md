@@ -42,6 +42,13 @@ rows from `segments.count`. Note the eddy loop's *quiet* failure mode, which is 
 of its coil's block, because its axial coordinate is negative, so before the loop overran it was writing each coil Segment's eddy
 losses onto its neighbour.
 
+**The rule cuts the other way when the thing asked about *is* a shield.** `EffectiveHeight(coil:)` was moved onto `CoilSegments()` in
+2024 so that a static ring (which shares its coil's `radialPos`) would not stretch the coil's height. But
+`CalculateCapacitanceMatrix` also calls it with a **radial shield's** own negative `radialPos` (via `RadialShieldOutside` →
+`CoilInnerShuntCapacitance` → `CapacitiveHeightInner`), and `CoilSegments()` has no shields in it, so the filter came back empty and
+`coilSections[0]` trapped. That was every simulation run with a radial shield fitted, for two years (fixed 2026-10-26; reproduced
+by `S0747-shield`). It now filters the whole store and drops static rings only.
+
 ## Static rings are located by GEOMETRY, not by their coordinates
 
 (Redesigned 2026-08-08.) `PhaseModel.StaticRingAbove(segment:)` / `StaticRingBelow(segment:)` return the nearest static ring in the

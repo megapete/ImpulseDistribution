@@ -340,3 +340,12 @@ through the transient; coil 3's `Series C (coil)` is 12.12's C_ms (1.221319e-9 F
 `.remove` edit on the series crossover — the only way to make that break — and then wire the two new leads, found as
 `.gapLead(coil: 1, gap: 0, …)`: tied straight back together, or with the whole tapping winding in series between them. They exist
 for `PhaseModel.RemoveConnection`; see "Cutting a winding for an LTC" in `docs/connectors-and-nodes.md`.
+
+## `S0747` / `S0747-shield`: a radial ground shield
+
+`S0747_AndIn.txt` (from the STME-0747 job folder) is a 12-turn LV sheet, a 76-disc HV and a 32-disc RV with a tapping gap at its
+centre. Both scenarios ground the LV, put 550 kV full wave on the HV top, ground the HV bottom, and tie the HV's centre crossover
+(discs 38/39, left in series) to the lower lead of the RV's centre gap: no taps in circuit. `-shield` then adds a radial shield
+150 mm in from the HV's ID with the `.radialShield` edit, a port of `doAddRadialShield`, as the last thing before the simulation is
+built. This is the first scenario with a radial shield in it, and until 2026-10-26 it trapped in `PhaseModel.EffectiveHeight`; see
+`docs/segments-and-geometry.md`.
