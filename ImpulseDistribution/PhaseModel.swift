@@ -2431,8 +2431,9 @@ actor PhaseModel /*:Codable */ {
         /// The Super Duper Shunt Capacitance Algorithm™: per-coil totals from the analytic formulas, spread at a uniform rate per
         /// metre over the node z positions and matched up node to node across each hilo.
         case capLink
-        /// Overlap-plus-decay: coupling booked disc pair by disc pair where the two conductors face each other, and decaying as
-        /// exp(-π·d/g) where they do not. See `OverlapDecayCoupling`.
+        /// Overlap-plus-fringe: coupling booked disc pair by disc pair where the two conductors face each other, and fringing
+        /// where they do not - as the field of a coil's edge for coil pairs (`OverlapFringeCoupling`, with static rings as end
+        /// electrodes), as a slot's exp(-π·d/g) for the walks to ground (`OverlapDecayCoupling`).
         case overlap
         /// Coil-to-coil terms from the electrostatic FE reference (TODO item 6d), everything to ground by the overlap rule. An
         /// experiment, not a production path: it costs a mesh and a solve per Segment every time C is built. See
@@ -2484,7 +2485,8 @@ actor PhaseModel /*:Codable */ {
     ///
     /// An engineering estimate, not a field solution. exp(-πd/g) is the lowest mode of a uniform slot; the real gap is layered
     /// (pressboard barriers in oil), the electrodes have finite radial build, and the end faces of the discs are ignored. The
-    /// electrostatic FE run proposed in 6b is the reference that calibrates the g to use.
+    /// electrostatic FE (TODO 6d) showed it is far too steep beyond the end of a coil, where there is no wall opposite the field,
+    /// so coil pairs now use `OverlapFringeCoupling`. It is kept for the walks to ground, which the FE cannot check.
     ///
     /// # The integration
     ///
@@ -2604,10 +2606,287 @@ actor PhaseModel /*:Codable */ {
         let b:Int
     }
 
+    /// How much of a coil's full facing coupling reaches a point on the opposite side of a radial gap, near one EDGE of that coil:
+    /// the end of the coil, or one side of a gap in it. Built once per side of a coil pair; `presence` is the weight.
+    ///
+    /// # The model
+    ///
+    /// Two dimensions, three conductors: the facing coil B as an infinite plane (y = 0), the edge's own coil A as a plate of
+    /// thickness t (its radial build) occupying x < 0, g < y < g + t, and whatever is BEHIND A - the core, the next coil out, the
+    /// tank - as another infinite plane at y = H = g + t + gb. A is at potential 1 and everything else at 0, which is what a
+    /// mutual capacitance means. The domain is a channel of width H beyond the edge (x → +∞), and two channels of widths g and gb
+    /// either side of the plate (x → −∞). The Schwarz–Christoffel map from the upper half w-plane is
+    ///
+    ///     dz/dw = (H/π)·√((w − a)(w − b))/((w − 1)(w + 1))
+    ///
+    /// with w = 1 → the channel of width g (under the plate), w = −1 → the one of width gb (behind it), w = ∞ → the one of width H,
+    /// and a < b the plate's two corners. The residues fix them: √((1 − a)(1 − b)) = p and √((1 + a)(1 + b)) = q, with p = 2g/H
+    /// and q = 2gb/H, so a + b = (q² − p²)/2 and ab = (p² + q²)/2 − 1: a quadratic. The plate is (−1, 1) on the real w axis and the
+    /// grounded walls are |w| > 1, so the complex potential is (1/(iπ))·ln((w − 1)/(w + 1)), and on B (w = v > 1)
+    ///
+    ///     σ/σ∞ = p/√((v − a)(v − b)),      σ∞ = ε/g, the parallel-plate value deep under A,
+    ///
+    /// which is 1 at v = 1 (x → −∞) and falls to 0 as v → ∞. The position on B is x(v) = PV∫_b^v dz/dw, measured from the corner
+    /// at w = b. It is elementary: with Q(t) = (t − a)(t − b), dz/dw = (H/π)·[1/√Q + (p²/2)/((t − 1)√Q) − (q²/2)/((t + 1)√Q)], and
+    ///
+    ///     ∫ dt/√Q = ln|2√Q + 2t − (a + b)|
+    ///     ∫ dt/((t − c)√Q) = −(1/√Q(c))·ln|(2Q(c) + Q′(c)(t − c) + 2√Q(c)√Q(t))/(t − c)|,      Q(1) = p², Q(−1) = q².
+    ///
+    /// The principal value at t = 1 only drops the iπ·residue, which is the step from y = g down to y = 0 and has no real part.
+    /// x(v) increases monotonically, so the weight at a given x is found by bisection on ln(v − 1).
+    ///
+    /// # What it shows
+    ///
+    /// - **With nothing close behind A** (gb, t → ∞) it is the field of a thick edge over a plane: 0.83 at the edge, and falling
+    ///   off as 2g/(πx) beyond it, because the field wraps round onto A's end face. That is why the slot result `exp(−πx/g)`,
+    ///   which `OverlapDecayCoupling` still uses for the ground walks, is far too steep beyond the end of a coil: it needs a wall
+    ///   opposite the field, and beyond the end of a coil there is none. S0747's RV (g = 77 mm, t = 82 mm, the tank 467 mm
+    ///   behind it) is this case. The HV discs beyond its ring collect 0.71, 0.58, 0.47, 0.39 and 0.34 of a facing disc by FE at
+    ///   x = 24, 49, 74, 98 and 123 mm, and this gives 0.68, 0.56, 0.45, 0.36 and 0.29 (TODO 6e).
+    /// - **With a wall close behind A** the channel beyond the edge has height H and the coupling dies as exp(−πx/H): the field
+    ///   goes to the wall, not to A's end. S0747's LV (g = 178 mm to the HV, the core 19 mm behind it) keeps 0.25 of a facing
+    ///   disc 100 mm past its end where a thick edge in the open would keep 0.62.
+    ///
+    /// # A gap of finite width
+    ///
+    /// An edge that faces another conductor of the same coil across a gap of width w - a duct, a tapping gap - is not an
+    /// isolated edge: a narrow gap is very nearly a continuous surface as seen from across g, which is why DelVecchio counts a
+    /// disc stack's full height. This is interpolated as
+    ///
+    ///     P = E(x) + (1 − E(x))·exp(−πw/(2g))
+    ///
+    /// which is 1 for w → 0 and the isolated edge E(x) for w ≫ g (exp(−8.3) on the RV's centre gap). It is an engineering
+    /// interpolation, not a field solution. It makes the deficit a narrow gap causes go as w²/g, which is the right order (a
+    /// narrow slot is a line dipole of strength ∝ w²), and it costs an aligned disc stack about 1% against a continuous sheet.
+    struct EdgeField: Sendable {
+
+        let g:Double
+        let H:Double
+        let p:Double
+        let q:Double
+        let a:Double
+        let b:Double
+        /// The antiderivative at the corner, w = b, which is x = 0.
+        let x0:Double
+
+        /// - Parameters:
+        ///   - g: the radial gap to the facing coil, m.
+        ///   - thickness: the coil's radial build, m.
+        ///   - backGap: the radial gap from the coil's other face to the nearest conductor behind it, m.
+        init(g:Double, thickness:Double, backGap:Double) {
+
+            // A zero back gap or thickness is a degenerate channel; a tenth of a millimetre is as good as zero to the result.
+            let t = max(thickness, 1.0e-4)
+            let gb = max(backGap, 1.0e-4)
+
+            self.g = g
+            self.H = g + t + gb
+            self.p = 2.0 * g / H
+            self.q = 2.0 * gb / H
+
+            let sum = (q * q - p * p) / 2.0
+            let product = (p * p + q * q) / 2.0 - 1.0
+            let root = sqrt(max(sum * sum - 4.0 * product, 0.0))
+
+            self.a = (sum - root) / 2.0
+            self.b = (sum + root) / 2.0
+            self.x0 = EdgeField.Antiderivative(b, H: H, p: p, q: q, a: a, b: b)
+        }
+
+        /// (H/π)·∫ √Q/(t² − 1) dt, for t ≥ b, up to a constant; see the type's comment.
+        static func Antiderivative(_ t:Double, H:Double, p:Double, q:Double, a:Double, b:Double) -> Double {
+
+            let rootQ = sqrt(max((t - a) * (t - b), 0.0))
+            let s = a + b
+
+            let i0 = log(abs(2.0 * rootQ + 2.0 * t - s))
+            let i1 = -log(abs((2.0 * p * p + (2.0 - s) * (t - 1.0) + 2.0 * p * rootQ) / (t - 1.0))) / p
+            let i2 = -log(abs((2.0 * q * q + (-2.0 - s) * (t + 1.0) + 2.0 * q * rootQ) / (t + 1.0))) / q
+
+            return H / π * (i0 + p * p / 2.0 * i1 - q * q / 2.0 * i2)
+        }
+
+        /// The position x(v) on the facing coil, measured from the edge.
+        func Position(_ v:Double) -> Double {
+
+            return EdgeField.Antiderivative(v, H: H, p: p, q: q, a: a, b: b) - x0
+        }
+
+        /// The fraction of the facing coupling per metre that reaches the facing coil at signed distance `x` from the edge
+        /// (positive beyond the conductor, negative under it), with the edge facing a gap of `gapWidth` (`.infinity` at the end
+        /// of the coil).
+        func presence(x:Double, gapWidth:Double) -> Double {
+
+            // x(v) is monotonic in v; bisect on τ = ln(v − 1), which keeps v → 1 (deep under the plate) resolvable. ±60 is far
+            // beyond any x a winding can produce, in either direction.
+            var lo = -60.0
+            var hi = 60.0
+
+            for _ in 0..<100 {
+
+                let mid = (lo + hi) / 2.0
+
+                if Position(1.0 + exp(mid)) < x {
+
+                    lo = mid
+                }
+                else {
+
+                    hi = mid
+                }
+            }
+
+            let v = 1.0 + exp((lo + hi) / 2.0)
+            let edge = p / sqrt((v - a) * (v - b))
+            let closure = gapWidth.isFinite ? exp(-π * gapWidth / (2.0 * g)) : 0.0
+
+            return edge + (1.0 - edge) * closure
+        }
+    }
+
+    /// The presence `EdgeField` describes, of one whole side of a coil pair at height z.
+    ///
+    /// - Under a conductor: the smaller of what its two edges allow, so that a disc next to a coil end or a tapping gap loses
+    ///   coupling and one between two ducts does not.
+    /// - In a gap between two of the side's conductors: the larger, which is the nearer edge. Summing the two edges instead would
+    ///   overcount: on S0747 an HV disc 114 mm from one edge of the RV's centre gap and 293 mm from the other collects 0.37 of a
+    ///   facing disc by FE, which is about what the near edge alone gives, where the sum gives 0.51.
+    /// - Beyond the side's last conductor: that edge, with nothing closing it.
+    ///
+    /// - Parameters:
+    ///   - side: the side's electrodes, sorted by z and not overlapping.
+    ///   - nearest: the index in `side` of the electrode nearest z, as `OverlapFringeCoupling` has found it.
+    static func SidePresence(_ side:[ShuntElectrode], nearest i:Int, z:Double, field:EdgeField) -> Double {
+
+        let below = i > 0 ? side[i].z1 - side[i - 1].z2 : Double.infinity
+        let above = i < side.count - 1 ? side[i + 1].z1 - side[i].z2 : Double.infinity
+
+        if z < side[i].z1 {
+
+            // in the gap below electrode i (and, if there is one, nearer i than i - 1)
+            return field.presence(x: side[i].z1 - z, gapWidth: below)
+        }
+
+        if z > side[i].z2 {
+
+            return field.presence(x: z - side[i].z2, gapWidth: above)
+        }
+
+        return min(field.presence(x: side[i].z1 - z, gapWidth: below), field.presence(x: z - side[i].z2, gapWidth: above))
+    }
+
+    /// The coupling between the two sides of a radial gap between two COILS, with the fringing at coil ends and gaps taken from
+    /// the field of a thick conductor's edge rather than a slot's (TODO item 6e). The ground walks keep `OverlapDecayCoupling`.
+    ///
+    /// At each z the coupling is
+    ///
+    ///     dC = c′ · P_A(z) · P_B(z) · dz,      booked to (nearest electrode of A, nearest electrode of B)
+    ///
+    /// with `P` from `SidePresence` and each side's own `EdgeField`: 1 (to within a percent) wherever a side has conductor or a
+    /// duct, and beyond a coil end or into a wide gap falling off as 2g/(πd) when nothing is close behind that coil, or as a
+    /// channel's exp(−πd/H) when something is. `c′` and the booking to the nearest electrodes are exactly as in
+    /// `OverlapDecayCoupling`; only the weight differs. Where one side faces another coil's end - S0747's HV beyond the RV - the
+    /// overhang is worth about one hilo of facing height per free edge, which is what the FE found, against g/π for the slot.
+    ///
+    /// The integrand is smooth between the breakpoints (every edge, and the middle of every gap and of every electrode, where
+    /// the nearest edge changes over), so each piece is cut into steps of at most 2 mm and integrated by 4-point Gauss–Legendre.
+    /// The window ends the integration, as it does in `OverlapDecayCoupling`: beyond the yokes the field ends on grounded steel.
+    ///
+    /// - Returns: the capacitance between electrode `a[i]` and `b[j]`, keyed by (i, j).
+    ///
+    /// - Parameters:
+    ///   - fieldA, fieldB: each side's `EdgeField`, built with the pair's radial gap, that side's radial build and the gap behind it.
+    static func OverlapFringeCoupling(a:[ShuntElectrode], b:[ShuntElectrode], fieldA:EdgeField, fieldB:EdgeField, faradsPerMetre:Double, zMin:Double, zMax:Double) -> [PairIndex:Double] {
+
+        guard !a.isEmpty, !b.isEmpty, fieldA.g > 0.0, zMax > zMin else {
+
+            return [:]
+        }
+
+        var breaks:[Double] = [zMin, zMax]
+
+        for side in [a, b] {
+
+            for i in 0..<side.count {
+
+                breaks.append(side[i].z1)
+                breaks.append(side[i].z2)
+                breaks.append((side[i].z1 + side[i].z2) / 2.0)
+
+                if i > 0 {
+
+                    breaks.append((side[i - 1].z2 + side[i].z1) / 2.0)
+                }
+            }
+        }
+
+        breaks = breaks.filter({ $0 >= zMin && $0 <= zMax }).sorted()
+
+        // the electrode of a side nearest to z (the one containing it, or the nearer of the two either side of the gap it is in)
+        func Nearest(_ side:[ShuntElectrode], _ z:Double) -> Int {
+
+            if z < side[0].z1 {
+
+                return 0
+            }
+
+            for i in 0..<side.count where z <= side[i].z2 {
+
+                return z >= side[i].z1 || z - side[i - 1].z2 > side[i].z1 - z ? i : i - 1
+            }
+
+            return side.count - 1
+        }
+
+        // 4-point Gauss–Legendre on [−1, 1]
+        let nodes = [-0.861136311594053, -0.339981043584856, 0.339981043584856, 0.861136311594053]
+        let weights = [0.347854845137454, 0.652145154862546, 0.652145154862546, 0.347854845137454]
+        let maxStep = 0.002
+
+        var result:[PairIndex:Double] = [:]
+
+        for p in 0..<breaks.count - 1 {
+
+            let s = breaks[p]
+            let t = breaks[p + 1]
+
+            // breakpoints closer than a micron are the same edge (see MeshBuilder.coordinateTolerance, for the same reason)
+            guard t - s > 1.0e-6 else {
+
+                continue
+            }
+
+            let mid = (s + t) / 2.0
+            let nearA = Nearest(a, mid)
+            let nearB = Nearest(b, mid)
+
+            let steps = Int(((t - s) / maxStep).rounded(.up))
+            let h = (t - s) / Double(steps)
+            var integral = 0.0
+
+            for k in 0..<steps {
+
+                let centre = s + (Double(k) + 0.5) * h
+
+                for q in 0..<4 {
+
+                    let z = centre + nodes[q] * h / 2.0
+                    integral += weights[q] * h / 2.0 * SidePresence(a, nearest: nearA, z: z, field: fieldA) * SidePresence(b, nearest: nearB, z: z, field: fieldB)
+                }
+            }
+
+            result[PairIndex(a: nearA, b: nearB), default: 0.0] += faradsPerMetre * integral
+        }
+
+        return result
+    }
+
     /// The shunt booking by overlap-plus-decay (TODO item 6b, step 1). Books, for every radial gap in the phase:
     ///
     /// 1. **coil i to whatever is inside it** - the core for coil 0, a radial shield if there is one, otherwise coil i − 1 - at
-    ///    `c′ = CoilInnerShuntCapacitance(i) / CapacitiveHeightInner(i)` across `HiloUnder(i)`;
+    ///    `c′ = CoilInnerShuntCapacitance(i) / CapacitiveHeightInner(i)` across `HiloUnder(i)`. Between two coils the fringe is
+    ///    `OverlapFringeCoupling`'s (TODO 6e), and each coil's static rings are electrodes on its end node (`StaticRingNode`);
+    ///    to the core or a shield it is the slot's;
     /// 2. **coil i to a radial shield outside it**, the same way from the shield's side;
     /// 3. **the outermost coil to the tank and to the adjacent phase**, as two separate walks, because their gaps differ by a
     ///    factor of several and the gap sets the decay. `c′` is each term of `OuterShuntCapacitance` over the outermost coil's
@@ -2645,7 +2924,10 @@ actor PhaseModel /*:Codable */ {
         let nodesOf = (bottom: bottomNode, top: topNode)
         let coilSegments = self.CoilSegments()
 
-        func CoilElectrodes(_ coil:Int) async throws -> [ShuntElectrode] {
+        // A coil's Segments, and with `rings` its static rings too, each on the one coil-end node it is tied to (see
+        // `StaticRingNode`). The rings are in the coil-to-coil walks only: there they are the end electrode the other coil's
+        // fringe field lands on (TODO 6d), while the ground walks are left as they were.
+        func CoilElectrodes(_ coil:Int, rings:Bool = false) async throws -> [ShuntElectrode] {
 
             var result:[ShuntElectrode] = []
 
@@ -2657,6 +2939,17 @@ actor PhaseModel /*:Codable */ {
                 }
 
                 result.append(ShuntElectrode(z1: await nextSegment.z1, z2: await nextSegment.z2, nodes: (bottom, top)))
+            }
+
+            if rings {
+
+                for nextRing in self.segmentStore where nextRing.isStaticRing && nextRing.radialPos == coil {
+
+                    if let node = await self.StaticRingNode(nextRing, bottomNode: nodesOf.bottom, topNode: nodesOf.top) {
+
+                        result.append(ShuntElectrode(z1: await nextRing.z1, z2: await nextRing.z2, nodes: (node, node)))
+                    }
+                }
             }
 
             return result.sorted(by: { $0.z1 < $1.z1 })
@@ -2676,9 +2969,19 @@ actor PhaseModel /*:Codable */ {
 
         let window = [ShuntElectrode(z1: 0.0, z2: self.core.realWindowHeight, nodes: nil)]
 
-        func Book(_ a:[ShuntElectrode], _ b:[ShuntElectrode], gap:Double, faradsPerMetre:Double) {
+        // `fields`, given for a coil pair, chooses the edge fringe of `OverlapFringeCoupling` over the slot decay; see there for why.
+        func Book(_ a:[ShuntElectrode], _ b:[ShuntElectrode], gap:Double, faradsPerMetre:Double, fields:(a:EdgeField, b:EdgeField)? = nil) {
 
-            let coupling = PhaseModel.OverlapDecayCoupling(a: a, b: b, gap: gap, faradsPerMetre: faradsPerMetre, zMin: 0.0, zMax: self.core.realWindowHeight)
+            let coupling:[PairIndex:Double]
+
+            if let fields = fields {
+
+                coupling = PhaseModel.OverlapFringeCoupling(a: a, b: b, fieldA: fields.a, fieldB: fields.b, faradsPerMetre: faradsPerMetre, zMin: 0.0, zMax: self.core.realWindowHeight)
+            }
+            else {
+
+                coupling = PhaseModel.OverlapDecayCoupling(a: a, b: b, gap: gap, faradsPerMetre: faradsPerMetre, zMin: 0.0, zMax: self.core.realWindowHeight)
+            }
 
             for (pair, capacitance) in coupling where capacitance > 0.0 {
 
@@ -2720,6 +3023,7 @@ actor PhaseModel /*:Codable */ {
 
             // 1. coil to whatever is inside it
             let inner:[ShuntElectrode]
+            var innerIsCoil = false
 
             if let innerShield = try await self.RadialShieldInside(coil: coil) {
 
@@ -2731,7 +3035,8 @@ actor PhaseModel /*:Codable */ {
             }
             else if coilPairs {
 
-                inner = try await CoilElectrodes(coil - 1)
+                inner = try await CoilElectrodes(coil - 1, rings: true)
+                innerIsCoil = true
             }
             else {
 
@@ -2742,7 +3047,19 @@ actor PhaseModel /*:Codable */ {
             let innerH = try await self.CapacitiveHeightInner(coil: coil)
             let innerGap = try await self.HiloUnder(coil: coil)
 
-            Book(inner, outer, gap: innerGap, faradsPerMetre: innerC / innerH)
+            if innerIsCoil {
+
+                let innerBuild = try await self.RadialBuildAndBackGap(coil: coil - 1, outward: false)
+                let outerBuild = try await self.RadialBuildAndBackGap(coil: coil, outward: true)
+                let fields = (a: EdgeField(g: innerGap, thickness: innerBuild.thickness, backGap: innerBuild.backGap),
+                              b: EdgeField(g: innerGap, thickness: outerBuild.thickness, backGap: outerBuild.backGap))
+
+                Book(inner, try await CoilElectrodes(coil, rings: true), gap: innerGap, faradsPerMetre: innerC / innerH, fields: fields)
+            }
+            else {
+
+                Book(inner, outer, gap: innerGap, faradsPerMetre: innerC / innerH)
+            }
 
             // 2. coil to a radial shield outside it
             if let outerShield = try await self.RadialShieldOutside(coil: coil) {
@@ -2866,7 +3183,6 @@ actor PhaseModel /*:Codable */ {
             }
         }
 
-        let coilSegments = self.CoilSegments()
         var result:[[Int]?] = []
 
         for nextSegment in self.segments {
@@ -2877,21 +3193,7 @@ actor PhaseModel /*:Codable */ {
             }
             else if nextSegment.isStaticRing {
 
-                let ringMid = (await nextSegment.z1 + nextSegment.z2) / 2.0
-                var nearest:(distance:Double, node:Int?) = (.infinity, nil)
-
-                for candidate in coilSegments where candidate.radialPos == nextSegment.radialPos {
-
-                    let (z1, z2) = (await candidate.z1, await candidate.z2)
-                    let distance = ringMid > z2 ? ringMid - z2 : (ringMid < z1 ? z1 - ringMid : 0.0)
-
-                    if distance < nearest.distance {
-
-                        nearest = (distance, ringMid > (z1 + z2) / 2.0 ? topNode[candidate.serialNumber] : bottomNode[candidate.serialNumber])
-                    }
-                }
-
-                result.append(nearest.node.map({ [$0] }))
+                result.append(await self.StaticRingNode(nextSegment, bottomNode: bottomNode, topNode: topNode).map({ [$0] }))
             }
             else if let bottom = bottomNode[nextSegment.serialNumber], let top = topNode[nextSegment.serialNumber] {
 
@@ -2904,6 +3206,72 @@ actor PhaseModel /*:Codable */ {
         }
 
         return result
+    }
+
+    /// A coil's radial build, and the radial gap from one of its faces to the nearest conductor beyond it: what is BEHIND the coil
+    /// as the coil on its other side sees it, for `EdgeField`.
+    ///
+    /// - parameter outward: true for the gap from the coil's OD outwards - to a radial shield, the next coil, or failing both the
+    ///   tank wall (the adjacent phase is left out, as the FE leaves it out); false for the gap from its ID inwards - to a shield,
+    ///   the previous coil, or the core.
+    func RadialBuildAndBackGap(coil:Int, outward:Bool) async throws -> (thickness:Double, backGap:Double) {
+
+        guard let first = self.CoilSegments().first(where: { $0.radialPos == coil }) else {
+
+            throw PhaseModelError(info: "\(coil)", type: .CoilDoesNotExist)
+        }
+
+        let (r1, r2) = (await first.r1, await first.r2)
+        var backGap = outward ? self.tankDepth / 2.0 - r2 : r1 - self.core.radius
+
+        // Every other conductor in the store, shields included and rings (which share their own coil's radii) not.
+        for nextSegment in self.segmentStore where nextSegment.radialPos != coil && !nextSegment.isStaticRing {
+
+            if outward {
+
+                let gap = await nextSegment.r1 - r2
+
+                if gap >= 0.0 {
+
+                    backGap = min(backGap, gap)
+                }
+            }
+            else {
+
+                let gap = await r1 - nextSegment.r2
+
+                if gap >= 0.0 {
+
+                    backGap = min(backGap, gap)
+                }
+            }
+        }
+
+        return (r2 - r1, backGap)
+    }
+
+    /// The node a static ring's shunt coupling is booked onto: the end node of the nearest Segment of its own coil, on the side
+    /// the ring is on. A ring has no nodes of its own; it is tied to that coil end, so it is at that node's potential.
+    ///
+    /// - Parameters:
+    ///   - bottomNode, topNode: Segment serial number → its bottom and top node, as the bookings build them from `nodeStore`.
+    func StaticRingNode(_ ring:Segment, bottomNode:[Int:Int], topNode:[Int:Int]) async -> Int? {
+
+        let ringMid = (await ring.z1 + ring.z2) / 2.0
+        var nearest:(distance:Double, node:Int?) = (.infinity, nil)
+
+        for candidate in self.CoilSegments() where candidate.radialPos == ring.radialPos {
+
+            let (z1, z2) = (await candidate.z1, await candidate.z2)
+            let distance = ringMid > z2 ? ringMid - z2 : (ringMid < z1 ? z1 - ringMid : 0.0)
+
+            if distance < nearest.distance {
+
+                nearest = (distance, ringMid > (z1 + z2) / 2.0 ? topNode[candidate.serialNumber] : bottomNode[candidate.serialNumber])
+            }
+        }
+
+        return nearest.node
     }
 
     /// The enclosure the FE booking solves in: no yokes or tank, with the boundary 1 m beyond the window and the tank wall. The
@@ -3812,8 +4180,37 @@ actor PhaseModel /*:Codable */ {
             nearest = nextSegment
         }
 
-        return (nearest?.isStaticRing ?? false) ? nearest : nil
+        guard let ring = nearest, ring.isStaticRing else {
+
+            return nil
+        }
+
+        // Nothing stands between, but across a tapping gap that is not enough: a ring on the far face of a 406 mm gap is the far
+        // Segment's ring, not this one's, and taking it for this one's both refuses the second ring of a pair fitted across the
+        // gap (`.ShieldingElementExists`) and books this disc as facing a ring it cannot see. So the ring is this Segment's only
+        // if it is no farther from this face than from the coil Segment on its own far side. A ring centred in a gap is as near
+        // to both and stays both Segments' ring, as "above k is below k+1" requires.
+        let ringFarFace = above ? await ring.z2 : await ring.z1
+        var farDistance = Double.greatestFiniteMagnitude
+
+        for nextSegment in self.segmentStore where nextSegment.radialPos == coil && !nextSegment.isStaticRing && !nextSegment.isRadialShield {
+
+            let nextFace = above ? await nextSegment.z1 : await nextSegment.z2
+            let distance = above ? nextFace - ringFarFace : ringFarFace - nextFace
+
+            if distance >= -PhaseModel.staticRingFacingTolerance {
+
+                farDistance = min(farDistance, distance)
+            }
+        }
+
+        return nearestDistance <= farDistance + PhaseModel.staticRingSharingTolerance ? ring : nil
     }
+
+    /// How much nearer to one of the two Segments either side of it a ring can be and still be both Segments' ring. A ring fitted
+    /// into a gap with `AddStaticRing` sits `StandardAxialGap/2` from its Segment, so a gap that holds exactly one ring leaves it
+    /// within rounding of the middle; a millimetre covers that and is still tiny against a gap with room for two rings.
+    private static let staticRingSharingTolerance = 1.0e-3
 
     /// A free axial coordinate for a new static ring in the given coil.
     ///

@@ -170,10 +170,15 @@ enum SelfTest {
     /// selection of one Segment, whatever that Segment turned out to be). The scenario names an END of a coil rather than a
     /// Segment for the same reason `LeadPoint` does: which Segment is at the top of a restructured coil is not knowable from the
     /// design file.
+    ///
+    /// With `gap`, the ring goes beside the coil's internal (tapping) gap of that number instead, counted from the bottom as
+    /// `LeadPoint.gapLead` counts them, facing into it: `.bottom` on top of the Segment below the gap, `.top` under the Segment
+    /// above it. That is where a designer puts the rings on the middle discs of a regulating winding.
     struct StaticRing {
 
         let coil:Int
         let end:CoilEnd
+        var gap:Int? = nil
     }
 
     /// A structural change made to the model after it is loaded and before the terminations go on.
@@ -441,8 +446,11 @@ enum SelfTest {
         return Scenario(name: name,
                         restructure: .none,
                         matchedBuild: nil,
+                        // The design file rings both ends of the HV and of the RV. PCH would also ring the RV's two middle discs,
+                        // the ones facing into its 406 mm centre gap (2026-10-27), so the scenario does.
+                        staticRings: [StaticRing(coil: 2, end: .bottom, gap: 0), StaticRing(coil: 2, end: .top, gap: 0)],
                         fixtureName: "S0747_AndIn.txt",
-                        notes: "LV grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded. RV declared an 8-loop regulating winding (halves paralleled), its centre leads tied to the HV centre crossover: no taps in circuit." + (shieldGap == nil ? "" : " Radial ground shield 150 mm inside the HV."),
+                        notes: "LV grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded. RV declared an 8-loop regulating winding (halves paralleled), its centre leads tied to the HV centre crossover: no taps in circuit. Static rings on the RV's two middle discs as well as the design file's end rings." + (shieldGap == nil ? "" : " Radial ground shield 150 mm inside the HV."),
                         // The declaration has already tied the RV's two centre leads to each other, so one jumper carries both.
                         jumpers: [Jumper(from: .gapLead(coil: 2, gap: 0, side: .bottom), to: .discCrossover(coil: 1, disc: 38))],
                         regulatingWindings: [RegulatingWinding(coil: 2, numLoops: 8)],
@@ -1841,11 +1849,32 @@ enum SelfTest {
     private static func ApplyStaticRing(_ ring:StaticRing, model:PhaseModel) async -> String {
 
         let coilSegments = await model.CoilSegments().filter({ $0.radialPos == ring.coil })
-        let isAbove = ring.end == .top
+        let adjacent:Segment
+        let isAbove:Bool
 
-        guard let adjacent = isAbove ? coilSegments.last : coilSegments.first else {
+        if let gap = ring.gap {
 
-            return "FAILED: coil \(ring.coil) has no Segments to fit a static ring to"
+            let gaps = await Wiring.InternalGaps(coil: ring.coil, model: model)
+
+            guard gap >= 0, gap < gaps.count else {
+
+                return "FAILED: coil \(ring.coil) has \(gaps.count) internal gap(s), so gap \(gap) does not exist"
+            }
+
+            // facing into the gap: above the Segment below it, or below the Segment above it
+            isAbove = ring.end == .bottom
+            adjacent = isAbove ? gaps[gap].below : gaps[gap].above
+        }
+        else {
+
+            isAbove = ring.end == .top
+
+            guard let endSegment = isAbove ? coilSegments.last : coilSegments.first else {
+
+                return "FAILED: coil \(ring.coil) has no Segments to fit a static ring to"
+            }
+
+            adjacent = endSegment
         }
 
         do {
@@ -1857,8 +1886,10 @@ enum SelfTest {
             let thickness = await newRing.z2 - z1
             let gap = isAbove ? await z1 - adjacent.z2 : await adjacent.z1 - newRing.z2
 
+            let place = ring.gap.map({ "gap \($0) \(ring.end == .bottom ? "bottom" : "top") side" }) ?? (isAbove ? "top" : "bottom")
+
             return String(format: "coil %d %@: ring at axial %d, %.3f mm thick, z1 = %.1f mm, %.3f mm gap to Segment %d (axial %d, %d disc(s))",
-                          ring.coil, isAbove ? "top" : "bottom", newRing.axialPos, thickness * 1000.0, z1 * 1000.0, gap * 1000.0,
+                          ring.coil, place, newRing.axialPos, thickness * 1000.0, z1 * 1000.0, gap * 1000.0,
                           adjacent.serialNumber, adjacent.axialPos, adjacent.basicSections.count)
         }
         catch {

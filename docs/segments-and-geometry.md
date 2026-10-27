@@ -64,6 +64,13 @@ could not represent a ring on each side of one Segment at all. The payoff beyond
 which is why *Combine* no longer tears its end rings down and builds replacements (that path also silently reset a custom gap or
 thickness to the default).
 
+**"Nothing stands between" is not enough across a tapping gap** (fixed 2026-10-27). With a ring fitted on the lower middle disc of
+S0747's RV, the nearest thing below the upper middle disc, 389 mm away across the 406 mm centre gap, was that ring. So the second
+ring of the pair was refused with `.ShieldingElementExists`, and before it was fitted the upper disc's series C was built as though
+it faced a ring. `NearestStaticRing` now keeps a ring only if it is no farther from the Segment's face than from the coil Segment on
+the ring's own far side, to within `staticRingSharingTolerance` (1 mm). A ring that fills a gap is as near to both sides and is
+still both Segments' ring.
+
 ## `SegmentAt(location:)` searches the whole store, and must
 
 Restricting it to `CoilSegments()` — which is exactly the filter that removes shielding elements — did not hide them from *some*

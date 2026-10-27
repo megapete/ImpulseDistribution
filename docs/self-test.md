@@ -363,6 +363,7 @@ and a 32-disc double-stacked regulating winding of 8 loops. Both scenarios are t
 grounded at both ends, 550 kV full wave on the HV top, HV bottom grounded. The HV's two centre discs stay in series across the gap,
 the RV is **declared** a regulating winding (its two halves paralleled, centre leads tied across its own gap), and those centre
 leads go to the HV's centre crossover, discs 38/39, which is where the tap changer ties them on the real unit. The `Connectivity:`
-line should show `40<-95,96`. `-shield` then adds a radial shield 150 mm in from the HV's ID with the `.radialShield` edit, a port
+line should show `40<-95,96`. Since 2026-10-27 both also fit a static ring on each of the RV's two middle discs, facing into its centre gap
+(`StaticRing(coil: 2, end: .bottom/.top, gap: 0)`), as PCH would on the real unit; the design file rings only the coil ends. `-shield` then adds a radial shield 150 mm in from the HV's ID with the `.radialShield` edit, a port
 of `doAddRadialShield`, as the last thing before the simulation is built. This is the first scenario with a radial shield in it,
 and until 2026-10-26 it trapped in `PhaseModel.EffectiveHeight`; see `docs/segments-and-geometry.md`.

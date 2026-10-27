@@ -218,7 +218,7 @@ from `SegmentAt(radial: -coil)`. For a shield, that is the coil **outside** it, 
 `S0747-shield`. The LV-to-shield capacitance was 3.065e-9 F; it is now 1.346e-9 F. The HV results are unchanged, because the
 LV is grounded at both ends.
 
-#### 6d. Electrostatic FE reference for the coil-to-coil shunt terms — built and run 2026-10-26; the rule needs revisiting
+#### 6d. Electrostatic FE reference for the coil-to-coil shunt terms — built and run 2026-10-26; the rule revised in 6e
 
 The purpose: 6c's rule `exp(−π·d/g)` is a slot estimate. An axisymmetric electrostatic solve gives every Segment-to-Segment
 coupling, fringing included, as the reference for the coil-to-coil shunt terms, **especially between coils of different heights**.
@@ -302,14 +302,66 @@ refinement by under 0.5%.
 
 **Open, for PCH:**
 
-- **Replace the decay rule, or book coil pairs from the FE?** The FE costs 13 s per C build on S0747. A revised rule would need
-  (a) static rings as end electrodes of their coil, and (b) a fringe that does not decay as a slot's. The FE's per-node tails above
-  are the data to fit it to; one full hilo per free edge is the size to aim at.
-- **`capLink` stays** until that is settled.
+- ~~**Replace the decay rule, or book coil pairs from the FE?**~~ PCH chose to fix the rule (2026-10-27): see 6e.
+- **`capLink` stays** until 6e has been lived with; then delete it.
 - The FE's ground terms are reported nowhere and booked nowhere, by design. If a coil-end-to-yoke term is ever wanted, it needs
   a model of the yoke's coverage, not this one.
 - Shared with 6c: a continuous disc faces the inner coil with its inner turn, so splitting a quarter onto each node pair is itself
   an approximation, and the FE booking inherits it.
+
+#### 6e. Coil-pair fringe from a coil edge's field — implemented 2026-10-27
+
+The overlap booking's coil-to-coil walks now use `PhaseModel.OverlapFringeCoupling`; the walks to the core, a shield, the tank and
+the adjacent phase keep the slot decay (`OverlapDecayCoupling`) unchanged. Three changes, each from what 6d's FE showed:
+
+1. **Static rings are electrodes of their coil**, on the end node they are tied to (`PhaseModel.StaticRingNode`), in the
+   coil-pair walks.
+2. **The fringe is the field of the coil's edge**, from an exact Schwarz–Christoffel solution (`PhaseModel.EdgeField`, derivation
+   in its comment). The coil is a plate of its radial build at the hilo from the facing coil, with a grounded wall at its back gap
+   behind it: the core, a shield, the next coil, or the tank. With nothing close behind, the weight falls off as 2g/(πd), about one
+   hilo of facing height per free edge. With a wall close behind, it dies as exp(−πd/H), because the field goes to the wall. The
+   second case is S0747's LV, with the core 19 mm inside it. The open-edge formula alone booked its LV–HV 12% high.
+3. **In a gap within a coil only the nearer edge counts**, and a gap of width w is closed by exp(−πw/(2g)), so ducts cost under 1%.
+
+PCH also rings the RV's two middle discs on S0747, so both S0747 scenarios now fit them (`StaticRing(..., gap: 0)`). Fitting the
+second one found a real bug: the ring lookup took a ring on the far side of a tapping gap for the near disc's own. It is fixed in
+`NearestStaticRing` (`docs/segments-and-geometry.md`).
+
+**Against the FE (`.open` 1.0 m refined; TV = distribution distance, each side):**
+
+| | rule | FE window | FE open | open / rule | TV |
+|---|---|---|---|---|---|
+| S0747 LV–HV | 2.908e-10 | 2.805e-10 | 2.911e-10 | 1.001 | 0.000 / 0.020 |
+| S0747 HV–RV (middle rings on) | 7.698e-10 | 7.700e-10 | 8.126e-10 | 1.056 | 0.042 / 0.051 |
+| S0747-shield HV–RV | 7.696e-10 | 7.700e-10 | 8.124e-10 | 1.056 | 0.042 / 0.051 |
+| STME0999 LV–HV | 1.376e-9 | 1.429e-9 | 1.430e-9 | 1.039 | 0.002 / 0.004 |
+| STME0999-v6 LV–HV (HV rings) | 1.391e-9 | 1.439e-9 | 1.440e-9 | 1.035 | 0.006 / 0.006 |
+| T0223-tap-declared 0–1 / 1–2 / 2–3 | 5.34 / 8.51 / 9.53e-10 | | 5.53 / 8.82 / 10.11e-10 | 1.036 / 1.037 / 1.061 | ≤ 0.026 |
+| T0239-ltc-full 0–1 / 1–2 | 7.66 / 9.78e-10 | | 7.98 / 10.51e-10 | 1.041 / 1.074 | ≤ 0.024 |
+
+Before this change, S0747 HV–RV was 1.68 at TV 0.36. Every pair is now within 7%, all on the low side, and every
+distribution within 0.05. The residual is in the facing part: an interior disc of a disc coil collects 5–20% more than DV 12.61
+by FE (the field enters the ducts and reaches the disc faces), which the rule does not model.
+
+**Effect (transient, 550 kV; the middle rings are in all four columns):**
+
+| | S0747 rule | S0747 FE hybrid | `-shield` rule | `-shield` FE hybrid |
+|---|---|---|---|---|
+| line-end gradient | 7.48× | 7.63× | 8.29× | 8.42× |
+| worst section | 38.2 kV | 38.9 kV | 42.1 kV | 42.7 kV |
+| worst gap, % of allowable | 83% | 85% | 91% | 93% |
+| HV centre, node 40 | 0.194 | 0.202 | 0.177 | 0.185 |
+| RV outer ends (79, 112) | 0.252 | 0.250 | 0.239 | 0.237 |
+
+Against 6c (old rule, no middle rings: 7.02×, 35.8 kV, RV ends 0.176), the unshielded unit's worst section rises 2.4 kV and its
+RV ends 0.076 p.u. (42 kV).
+
+**Open:**
+
+- For the outermost coil the "wall behind" is the tank. The adjacent phase is nearer over part of the circumference and would
+  trim the fringe; it is left out because the FE cannot check it.
+- The ground walks still use the slot decay. The FE cannot judge them (6d), and beyond a coil's end the yoke is a real wall, which
+  is the case the slot is right for. The tank and phase walks along the coil's height are the doubtful part (6c).
 
 ## Dielectric stress screen
 

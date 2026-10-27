@@ -121,10 +121,31 @@ What to know before using it:
 - **Coil pairs only.** Its yokes are plates over 100% of a coil's end and its tank is a cylinder, so anything ending on them is
   overstated. No ground term is compared or booked from it. The `.window` and `.open` enclosures bracket what the yokes and tank do
   to the coil pairs; on every fixture so far the two agree within 6%.
-- **A static ring's coupling belongs to its coil's end node** (`PhaseModel.ShuntElectrodeNodes`). The analytic booking ignores
-  rings, but they carry a large share of a shorter coil's end fringing: 13% of S0747's HV–RV coupling on each of the RV's two.
+- **A static ring's coupling belongs to its coil's end node** (`PhaseModel.StaticRingNode`). Rings carry a large share of a
+  shorter coil's end fringing: 13% of S0747's HV–RV coupling on each of the RV's two outer rings.
 - **The hilo is homogeneous, not tubes in oil**, so that FE and formula differ in geometry only. See 6d for why real tubes would
   have differed by about 1% on their own.
+
+## The coil-to-coil fringe is a coil edge's field, not a slot's
+
+Between two coils, `BookShuntCapacitancesByOverlap` integrates `c′·P_A(z)·P_B(z)` along the window, booked to the nearest electrode
+on each side (`OverlapFringeCoupling`, TODO item 6e). The ground walks still use the slot's `exp(−πd/g)` (`OverlapDecayCoupling`).
+Three things in it are not obvious and are each what the FE showed:
+
+- **Beyond the end of a coil, the coupling falls off as 1/d, not exponentially.** The slot result needs a wall opposite the field,
+  and beyond a coil's end there is none: the field wraps round onto the coil's end face. `PhaseModel.EdgeField` is the exact
+  Schwarz–Christoffel solution for a plate of the coil's radial build, at the hilo from the facing coil, with a grounded wall at the
+  coil's back gap behind it. Its doc comment has the derivation. On S0747's RV (nothing behind it but the tank) it gives about one
+  hilo of facing height per free edge, against the slot's g/π, which was the 40% the old rule was short on HV–RV.
+- **What is behind the shorter coil decides it.** With a wall close behind - S0747's LV, with the core 19 mm inside it - the
+  channel beyond the edge is narrow and the coupling dies as `exp(−πd/H)` instead: the field goes to the wall, not to the coil's
+  end. Using the open-edge result there books S0747's LV–HV 12% high.
+- **Static rings are electrodes of their coil, on its end node**, in the coil-pair walks only. A ring extends the coil's edge, and
+  the fringe the coil beside it sends there lands on the ring.
+
+In a gap within a coil, only the nearer edge counts (summing both overcounts the FE by 40% mid-gap), and a gap of width w is closed
+by `exp(−πw/(2g))`, so that ducts cost under 1%. For the outermost coil, the "wall behind" is the tank. The adjacent phase is
+nearer, over part of the circumference, and would cut the fringe somewhat; it is left out, as the FE leaves it out.
 
 ## Other structural facts worth knowing before editing
 
