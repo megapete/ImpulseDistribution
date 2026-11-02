@@ -200,6 +200,9 @@ enum SelfTest {
         case interleave(coil:Int)
         /// Put a wound-in shield of `turnsPerDisc` turns into every disc pair of the coil (DelVecchio 12.11).
         case woundInShield(coil:Int, turnsPerDisc:Int, connection:Segment.WoundInShieldWire.Connection)
+        /// The same shield in only the TOP `discs` discs of the coil (an even number), the rest left plain - the usual way a shield
+        /// is fitted, graded off towards the line end. Only those discs are rebuilt into two-disc Segments.
+        case woundInShieldTop(coil:Int, discs:Int, turnsPerDisc:Int, connection:Segment.WoundInShieldWire.Connection)
 
         var isInterleave:Bool {
 
@@ -263,6 +266,9 @@ enum SelfTest {
         /// there. Off by default because it is a page per hundred nodes; on for any scenario that is about the CONNECTIONS,
         /// where "which nodes did the model decide are grounded" is the whole question.
         var reportNodes:Bool = false
+        /// Coils whose disc-to-disc profile is printed as well as `continuumCoil`'s - for a coil that takes its stress by transfer,
+        /// such as a grounded winding beside the impulsed one.
+        var profileCoils:[Int] = []
     }
 
     /// The STME-0999 fixture: a real two-winding core-form design, 4160Y/2400 V LV and 69 kV delta HV, 350 kV BIL on
@@ -423,8 +429,52 @@ enum SelfTest {
         "T0239-ltc-full" : T0239LTC(name: "T0239-ltc-full", tapsInCircuit: true),
 
         "S0747-shield" : S0747(name: "S0747-shield", shieldGap: 0.15),
-        "S0747" : S0747(name: "S0747", shieldGap: nil)
+        "S0747" : S0747(name: "S0747", shieldGap: nil),
+
+        // The S0749 fixture's impulse test, plain and with a 3-turn floating wound-in shield in the top of the HV. Asked about
+        // 2026-11-02: shielding the HV's top 12 discs overstressed the TOP of the grounded coil 1 beside it. See S0749.
+        "S0749" : S0749(name: "S0749", restructure: .none),
+        "S0749-shield12" : S0749(name: "S0749-shield12", restructure: .woundInShieldTop(coil: 2, discs: 12, turnsPerDisc: 3, connection: .floating)),
+        "S0749-shield48" : S0749(name: "S0749-shield48", restructure: .woundInShieldTop(coil: 2, discs: 48, turnsPerDisc: 3, connection: .floating)),
+        "S0749-shield88" : S0749(name: "S0749-shield88", restructure: .woundInShield(coil: 2, turnsPerDisc: 3, connection: .floating))
     ]
+
+    /// The S0749 fixture (STME-0749 quotation): coil 0 and coil 1 grounded at both ends, 650 kV full wave on the top of the
+    /// 88-disc HV (coil 2), whose bottom goes to the bottom of the double-stacked RV (coil 3, 2 x 32 discs, tapped every 4 discs),
+    /// which is declared an 8-loop regulating winding - halves paralleled - with its centre leads grounded. Coil 1's profile is printed as well as the HV's, because the question the
+    /// fixture was made for is the disc-to-disc stress at the top of coil 1.
+    private static func S0749(name:String, restructure:Restructure) -> Scenario {
+
+        let shielding:String
+
+        switch restructure {
+        case .woundInShieldTop(_, let discs, let turns, _): shielding = "\(turns)-turn floating wound-in shield in the HV's top \(discs) discs."
+        case .woundInShield(_, let turns, _): shielding = "\(turns)-turn floating wound-in shield in every HV disc pair."
+        default: shielding = "HV as designed."
+        }
+
+        return Scenario(name: name,
+                        restructure: restructure,
+                        matchedBuild: nil,
+                        fixtureName: "S0749_AndIn.txt",
+                        notes: "Coils 0 and 1 grounded at both ends; 650 kV full wave on the HV (coil 2) top, HV bottom to the RV (coil 3) bottom; RV declared an 8-loop regulating winding (halves paralleled), centre leads grounded. " + shielding,
+                        // The declaration parallels the RV's halves and ties its centre leads across its gap, so only the tie to
+                        // the HV and the one centre ground are left to make by hand.
+                        jumpers: [Jumper(from: .coilEnd(coil: 2, end: .bottom), to: .coilEnd(coil: 3, end: .bottom))],
+                        regulatingWindings: [RegulatingWinding(coil: 3, numLoops: 8)],
+                        terminations: [Termination(point: .coilEnd(coil: 0, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 0, end: .top), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 1, end: .top), type: .ground),
+                                       Termination(point: .gapLead(coil: 3, gap: 0, side: .bottom), type: .ground),
+                                       Termination(point: .coilEnd(coil: 2, end: .top), type: .impulse)],
+                        waveFormType: .FullWave,
+                        peakVoltage: 650.0e3,
+                        displaySpan: 100.0e-6,
+                        bandwidth: 10.0e6,
+                        continuumCoil: 2,
+                        profileCoils: [1])
+    }
 
     /// The S0747 fixture: a 12-turn LV sheet (coil 0), a 76-disc delta HV (coil 1) with a 3" physical gap at its centre, and a
     /// 32-disc double-stacked regulating winding (coil 2) of 8 loops, wired the way the unit is tested with NO TAPS IN CIRCUIT.
@@ -1389,7 +1439,10 @@ enum SelfTest {
 
             summary += "; " + transient.summary
 
-            text += await AxialProfileReport(model: model, results: results, alpha: alpha, scenario: scenario)
+            for coil in [scenario.continuumCoil] + scenario.profileCoils {
+
+                text += await AxialProfileReport(model: model, results: results, alpha: alpha, coil: coil, scenario: scenario)
+            }
 
             if UserDefaults.standard.bool(forKey: graphsKey) {
 
@@ -1796,6 +1849,76 @@ enum SelfTest {
             await controller.updateModel(oldSegments: segments, newSegments: interleaved, xlFile: nil, reinitialize: false)
 
             return "interleaved coil \(coil): \(sections.count) discs -> \(interleaved.count) interleaved Segments"
+
+        case .woundInShieldTop(let coil, let discs, let turnsPerDisc, let connection):
+
+            let sizing = await SizeShield(coil: coil, turnsPerDisc: turnsPerDisc, connection: connection, model: model)
+
+            guard case .ok(let wire, _, let allSections, let allSegments) = sizing else {
+
+                if case .failed(let why) = sizing {
+
+                    return "FAILED: \(why)"
+                }
+
+                return "FAILED: the shield could not be sized"
+            }
+
+            guard discs >= 2, discs % 2 == 0, discs <= allSections.count else {
+
+                return "FAILED: \(discs) discs cannot be shielded in pairs on a coil of \(allSections.count)"
+            }
+
+            // axialPos is a coordinate, so it orders the discs; it is never used as an index here.
+            let ordered = allSections.sorted(by: { $0.location.axial < $1.location.axial })
+            let chosen = Array(ordered.suffix(discs))
+            let chosenAxial = Set(chosen.map({ $0.location.axial }))
+
+            // On a freshly loaded model every disc is its own Segment, so the Segments to replace are exactly those holding a chosen
+            // disc - and none of them may also hold a disc that is staying plain.
+            var segments:[Segment] = []
+
+            for segment in allSegments {
+
+                let axials = segment.basicSections.map({ $0.location.axial })
+
+                if axials.contains(where: { chosenAxial.contains($0) }) {
+
+                    guard axials.allSatisfy({ chosenAxial.contains($0) }) else {
+
+                        return "FAILED: a Segment of coil \(coil) straddles the edge of the shielded zone"
+                    }
+
+                    segments.append(segment)
+                }
+            }
+
+            let core = await model.core
+            var paired:[Segment] = []
+
+            do {
+
+                for i in stride(from: 0, to: chosen.count, by: 2) {
+
+                    let newSegment = try Segment(basicSections: [chosen[i], chosen[i + 1]],
+                                                 realWindowHeight: core.realWindowHeight,
+                                                 useWindowHeight: core.adjustedWindHt)
+
+                    await newSegment.SetWoundInShield(Segment.WoundInShield(wire: wire, turnsPerDisc: turnsPerDisc, pairCount: 1))
+                    paired.append(newSegment)
+                }
+            }
+            catch {
+
+                return "FAILED: could not build the shielded segments: \(error)"
+            }
+
+            await controller.updateModel(oldSegments: segments, newSegments: paired, xlFile: nil, reinitialize: false)
+
+            var outcome = "coil \(coil): \(turnsPerDisc)-turn wound-in shield (\(connection.description)) in the top \(discs) discs (\(paired.count) pairs), the other \(allSections.count - discs) plain"
+            outcome += String(format: ", wire %.3f mm bare radial + %.3f mm insulation (two-sided)", wire.bareRadial * 1000.0, wire.insulation * 1000.0)
+
+            return outcome
 
         case .woundInShield(let coil, let turnsPerDisc, let connection):
 
@@ -3471,9 +3594,9 @@ enum SelfTest {
     /// It also pins the two derived quantities, which are recovered from the check rather than recomputed: the allowable field is
     /// averageField / averageUtilization and the allowable ΔV is deltaV / averageUtilization, both exact because the field is
     /// linear in the driving voltage.
-    private static func AxialProfileReport(model:PhaseModel, results:[SimulationModel.SimulationStepResult], alpha:[Double], scenario:Scenario) async -> String {
+    private static func AxialProfileReport(model:PhaseModel, results:[SimulationModel.SimulationStepResult], alpha:[Double], coil:Int, scenario:Scenario) async -> String {
 
-        var text = "AXIAL STRESS PROFILE (coil \(scenario.continuumCoil), disc to disc)\n"
+        var text = "AXIAL STRESS PROFILE (coil \(coil), disc to disc)\n"
         text += String(repeating: "-", count: 110) + "\n"
 
         let checks = await DielectricStress.Report(model: model,
@@ -3481,7 +3604,7 @@ enum SelfTest {
                                                    capacitiveDistribution: alpha,
                                                    peakVoltage: scenario.peakVoltage)
 
-        let name = DielectricStress.AxialProfileName(coil: scenario.continuumCoil)
+        let name = DielectricStress.AxialProfileName(coil: coil)
 
         let profile = checks.filter { $0.kind == .discToDisc && $0.profileName == name && $0.profileHeight != nil }
             .sorted { ($0.profileHeight ?? 0.0) < ($1.profileHeight ?? 0.0) }
@@ -3495,7 +3618,7 @@ enum SelfTest {
 
         // Every disc-to-disc check of this coil should be in the profile: the tag is not optional, and one without a height is a
         // gap the graph cannot draw.
-        let untagged = checks.filter { $0.kind == .discToDisc && $0.location.hasPrefix("Coil \(scenario.continuumCoil),") && $0.profileHeight == nil }.count
+        let untagged = checks.filter { $0.kind == .discToDisc && $0.location.hasPrefix("Coil \(coil),") && $0.profileHeight == nil }.count
 
         text += "  \(profile.count) gaps tagged\(untagged == 0 ? "" : " - FAILED: \(untagged) disc-to-disc check(s) of this coil carry no height")\n"
 

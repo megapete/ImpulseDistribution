@@ -450,7 +450,7 @@ enum FrequencyDomainSolver {
 
         let (matrix, rhs) = Assemble(s: s, drive: Complex(1.0), snapshot: snapshot)
 
-        guard let solution = await Solve(matrix: matrix, rhs: rhs, size: snapshot.unknownCount) else {
+        guard let solution = Solve(matrix: matrix, rhs: rhs, size: snapshot.unknownCount) else {
 
             return nil
         }
@@ -460,39 +460,66 @@ enum FrequencyDomainSolver {
 
     // MARK: - The linear solve
 
-    /// Solves one assembled complex system.
+    /// Solves one assembled complex system, `A x = b`, with LAPACK's `zgesv_` (LU with partial pivoting, then the two triangular
+    /// solves - the same `zgetrf_` + `zgetrs_` that `PchMatrix.Solve` makes, in one call).
     ///
-    /// `PchMatrix` handles the LAPACK plumbing (`zgetrf_`/`zgetrs_` via
-    /// `Solve`). The matrix is handed over in a SINGLE `SetBuffer` call rather
-    /// than entry by entry: `PchMatrix` is an actor, so a per-entry loop would
-    /// cost nx^2 actor hops per frequency - around 3e8 for a full run, which
-    /// would dominate the runtime completely.
-    static func Solve(matrix:[Double], rhs:[Double], size:Int) async -> [Complex<Double>]? {
+    /// `matrix` is nx x nx and `rhs` is nx x 1, both column-major with each complex entry as two consecutive Doubles (re, im) -
+    /// which is exactly LAPACK's `double complex` layout, so the buffers are handed over as they are. On return `rhs`'s copy holds
+    /// x in the same layout.
+    ///
+    /// WHY THIS DOES NOT GO THROUGH `PchMatrix` ANY MORE, AND WHY IT FORCES SINGLE-THREADED LAPACK (2026-11-02). The sweep runs
+    /// one of these per core, concurrently, on Swift's cooperative thread pool, which has exactly one thread per core. Accelerate's
+    /// default threading model may split a factorization into sub-jobs and then BLOCK the calling thread on a dispatch group until
+    /// they finish. Whether it splits depends on the chip: on an M4 Pro (14 cores) it does at the size of S0749's system, every
+    /// pool thread ends up parked in `_dispatch_group_wait_slow` under `zgetrf`, the sub-jobs never get a thread, and the sweep
+    /// hangs at 0% CPU forever. The same build, same file, same macOS on a plain M4 never splits and runs fine. Nothing is lost by
+    /// turning it off here: the parallelism is already across frequency points, one per core, so LAPACK's own threads could only
+    /// oversubscribe the machine.
+    ///
+    /// `BLASSetThreading` is THREAD-LOCAL (`thread_api.h`: "saved in a thread local variable"). That is why the solve is a
+    /// synchronous call with no `await` in it: an actor method - `PchMatrix` is an actor - can run on any pool thread, and a task
+    /// can resume on a different thread after every suspension point, so a setting made anywhere else is not guaranteed to be in
+    /// force on the thread that actually reaches LAPACK. Set and called back to back on one thread, it is. The previous model is
+    /// restored afterwards so the pool thread goes back to whatever else uses it (the FE package, for one) as it was found.
+    ///
+    /// Going direct also removes four actor hops and three buffer copies per frequency point.
+    static func Solve(matrix:[Double], rhs:[Double], size:Int) -> [Complex<Double>]? {
 
-        let a = PchMatrix(matrixType: .general, numType: .Complex, rows: UInt(size), columns: UInt(size))
-        let b = PchMatrix(matrixType: .general, numType: .Complex, rows: UInt(size), columns: 1)
+        guard size > 0, matrix.count == 2 * size * size, rhs.count == 2 * size else {
 
-        do {
-
-            try await a.SetBuffer(newBuffer: matrix)
-            try await b.SetBuffer(newBuffer: rhs)
-
-            let x = try await a.Solve(B: b)
-            let buffer = await x.ComplexBufferAsDoubleArray()
-
-            guard buffer.count >= 2 * size else {
-
-                DLog("Solution buffer is \(buffer.count) long, expected \(2 * size)")
-                return nil
-            }
-
-            return (0..<size).map { Complex(buffer[2 * $0], buffer[2 * $0 + 1]) }
-        }
-        catch {
-
-            DLog("Solve failed: \(error)")
+            DLog("Solve was handed a \(matrix.count)-Double matrix and a \(rhs.count)-Double right-hand side for nx = \(size)")
             return nil
         }
+
+        let previousThreading = BLASGetThreading()
+        _ = BLASSetThreading(BLAS_THREADING_SINGLE_THREADED)
+        defer { _ = BLASSetThreading(previousThreading) }
+
+        var a = matrix
+        var b = rhs
+        var n = __LAPACK_int(size)
+        var nrhs = __LAPACK_int(1)
+        var lda = n
+        var ldb = n
+        var ipiv = [__LAPACK_int](repeating: 0, count: size)
+        var info:__LAPACK_int = 0
+
+        a.withUnsafeMutableBufferPointer { A in
+
+            b.withUnsafeMutableBufferPointer { B in
+
+                zgesv_(&n, &nrhs, OpaquePointer(A.baseAddress!), &lda, &ipiv, OpaquePointer(B.baseAddress!), &ldb, &info)
+            }
+        }
+
+        // info > 0: U(info, info) is exactly zero, so the system is singular at this frequency. PchMatrix threw for the same case.
+        guard info == 0 else {
+
+            DLog("zgesv_ failed with info = \(info) (nx = \(size))")
+            return nil
+        }
+
+        return (0..<size).map { Complex(b[2 * $0], b[2 * $0 + 1]) }
     }
 
     // MARK: - The frequency sweep
@@ -567,7 +594,7 @@ enum FrequencyDomainSolver {
             let drive = waveForm.U(s)
             let (matrix, rhs) = Assemble(s: s, drive: drive, snapshot: snapshot)
 
-            guard let solution = await Solve(matrix: matrix, rhs: rhs, size: nx) else {
+            guard let solution = Solve(matrix: matrix, rhs: rhs, size: nx) else {
 
                 return nil
             }

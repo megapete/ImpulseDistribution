@@ -367,3 +367,25 @@ line should show `40<-95,96`. Since 2026-10-27 both also fit a static ring on ea
 (`StaticRing(coil: 2, end: .bottom/.top, gap: 0)`), as PCH would on the real unit; the design file rings only the coil ends. `-shield` then adds a radial shield 150 mm in from the HV's ID with the `.radialShield` edit, a port
 of `doAddRadialShield`, as the last thing before the simulation is built. This is the first scenario with a radial shield in it,
 and until 2026-10-26 it trapped in `PhaseModel.EffectiveHeight`; see `docs/segments-and-geometry.md`.
+
+## `S0749` and its three shielded variants: a shield that overstresses the winding beside it
+
+`S0749_AndIn.txt` (from the STME-0749 quotation folder) has four coils: coils 0 and 1 grounded at both ends, an 88-disc HV (coil 2)
+with 650 kV on its top, and a 2 × 32-disc double-stacked RV (coil 3) declared an 8-loop regulating winding, its centre leads grounded and
+its bottom tied to the HV's bottom. `-shield12`, `-shield48` and `-shield88` fit a 3-turn floating wound-in shield to the HV's top 12,
+top 48 and every disc, via `Restructure.woundInShieldTop` (the top N discs only) or `.woundInShield`. `Scenario.profileCoils` prints
+coil 1's disc-to-disc profile beside the HV's, because coil 1 is the point of the fixture. It was made for a reported surprise
+(2026-11-02): shielding the HV's top overstressed the TOP gap of the grounded coil 1, and it reproduces that:
+
+| | HV worst gap | coil 1 top gap | HV at x = 0.979 / 0.957, t = 0+ |
+|---|---|---|---|
+| plain | 122% | 66.9 kV, **77%** | 0.774 / 0.619 p.u. |
+| top 12 shielded | 68% | 92.0 kV, **106%** | 0.911 / 0.831 |
+| top 48 shielded | 60% | 88.3 kV, **102%** | — |
+| all 88 shielded | 60% | 88.0 kV, **101%** | 0.893 / 0.796 |
+
+It is real, not a fault: the shield flattens the HV's line-end gradient, so the HV discs facing coil 1's top two discs sit 100-200 kV
+higher, and coil 1's next-to-top disc is pulled up capacitively against a top disc held at earth by its lead. Shielding further down
+cannot help, because it is the top few HV discs that matter and they are near 0.9 p.u. once any shield is fitted. This is the fixture
+that found the LAPACK deadlock in `docs/concurrency.md`: the plain run is about 165 s on an M4 Pro.
+

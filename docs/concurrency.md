@@ -60,6 +60,25 @@ The frequency sweep bounds its own parallelism to one task per core (primed, the
 launching all ~2000 solves at once. Each in-flight solve holds an nx×nx complex matrix — ~2.5 MB at nx=400 — so an unbounded
 `TaskGroup` would need several GB of live matrices. Keep the bound if you touch that loop.
 
+**Each solve runs LAPACK single-threaded, and must (2026-11-02).** The sweep's tasks occupy every thread of Swift's cooperative
+pool, one per core. Accelerate's default threading model may split a factorization into sub-jobs and then *block* the calling
+thread on a dispatch group until they finish; with every pool thread parked in `_dispatch_group_wait_slow` under `zgetrf`, the
+sub-jobs never run and the sweep hangs at 0% CPU, forever, with no error. Whether Accelerate splits is chip-dependent: S0749
+hung every time on an M4 Pro (14 cores) and never on a plain M4 — same build, same file, same macOS 27.0.1. A `sample` of the
+stuck process is the diagnosis; the progress bar just stops.
+
+`FrequencyDomainSolver.Solve` therefore calls `zgesv_` **directly and synchronously**, with `BLASSetThreading(BLAS_THREADING_SINGLE_THREADED)`
+set immediately before and the previous model restored after. Two things about that are forced:
+
+- **`BLASSetThreading` is thread-local.** Setting it once around the sweep does nothing reliable: a task can resume on a different
+  pool thread after every `await`. Setting and calling back to back with no suspension point between them is the only form that
+  is guaranteed to reach the thread that enters LAPACK.
+- **It cannot go through `PchMatrix`.** `PchMatrix` is an actor, so its LAPACK call runs on whatever thread the actor is
+  scheduled on, not the one that made the setting. (Going direct also drops four actor hops and three buffer copies per point.)
+
+The same trap is open to any other code that runs dense LAPACK from several tasks at once on the cooperative pool. Nothing is lost
+by single-threading inside a sweep: the parallelism is already across frequency points.
+
 ## `assumeIsolated`
 
 It *traps* if the assumption is ever wrong, so only use it where the main thread is guaranteed — otherwise hop with
