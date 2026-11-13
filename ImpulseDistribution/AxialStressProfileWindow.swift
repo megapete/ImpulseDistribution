@@ -85,13 +85,16 @@ class AxialStressProfileWindow:NSWindowController {
     }
 
     private let profiles:[Profile]
+    /// The design file's name, for the saved workbook. Nil where the model did not come from a file.
+    private let designName:String?
 
     private let graphView = StressProfileView()
     private let profilePicker = NSPopUpButton()
     private let noteLabel = NSTextField(labelWithString: "")
+    private let saveButton = NSButton(title: "Save as Excel…", target: nil, action: nil)
 
     /// - Returns: nil if the findings hold no disc-to-disc gaps at all, which is what a model with no disc windings looks like.
-    init?(checks:[DielectricStress.StressCheck], title:String) {
+    init?(checks:[DielectricStress.StressCheck], title:String, designName:String? = nil) {
 
         var grouped:[String:[DielectricStress.StressCheck]] = [:]
 
@@ -149,6 +152,7 @@ class AxialStressProfileWindow:NSWindowController {
         built.sort { $0.name < $1.name }
 
         self.profiles = built
+        self.designName = designName
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 560),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -200,9 +204,16 @@ class AxialStressProfileWindow:NSWindowController {
 
         graphView.translatesAutoresizingMaskIntoConstraints = false
 
+        saveButton.bezelStyle = .rounded
+        saveButton.target = self
+        saveButton.action = #selector(handleSaveAsExcel(_:))
+        saveButton.toolTip = "Save every coil's profile - the numbers and a chart of each - as an Excel workbook"
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
         contentView.addSubview(profilePicker)
         contentView.addSubview(noteLabel)
         contentView.addSubview(graphView)
+        contentView.addSubview(saveButton)
 
         NSLayoutConstraint.activate([
 
@@ -217,7 +228,10 @@ class AxialStressProfileWindow:NSWindowController {
             graphView.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
             graphView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
             graphView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            graphView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+            graphView.bottomAnchor.constraint(equalTo: saveButton.topAnchor, constant: -8),
+
+            saveButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
+            saveButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
         ])
 
         window.contentView = contentView
@@ -237,25 +251,35 @@ class AxialStressProfileWindow:NSWindowController {
 
         let profile = profiles[index]
 
-        // kV/mm throughout, matching the y axis and every allowable in DielectricStress. Two units in one window is how a stress
-        // gets misread by a factor of a thousand - see the unit note in AxisScale.UnitScale.
-        var annotation:[(label:String, value:String)] = []
-
-        if let worst = profile.worst {
-
-            annotation = [(label: "Maximum stress:", value: String(format: "%.2f kV/mm", worst.stress / 1.0E6)),
-                          (label: "At height:", value: String(format: "%.0f mm", worst.z * 1000.0)),
-                          (label: "ΔV there:", value: String(format: "%.2f kV", worst.deltaV / 1000.0)),
-                          (label: "Allowable ΔV there:", value: String(format: "%.2f kV  (at %.2f kV/mm)", worst.allowableDeltaV / 1000.0, worst.allowableStress / 1.0E6)),
-                          (label: "Utilization:", value: String(format: "%.0f%% of allowable", worst.utilization * 100.0))]
-        }
-
         graphView.plot = StressProfileView.Plot(points: profile.points.map { StressProfileView.Point(z: $0.z, value: $0.stress, allowable: $0.allowableStress, utilization: $0.utilization) },
                                                 quantity: .stress,
                                                 peakTestVoltage: 0.0,
-                                                annotation: annotation,
+                                                annotation: AxialStressProfileWindow.Annotation(for: profile),
                                                 markers: [],
                                                 markerName: "")
+
+        noteLabel.stringValue = AxialStressProfileWindow.Note(for: profile)
+    }
+
+    /// The annotation block's rows, which the saved workbook repeats word for word.
+    ///
+    /// kV/mm throughout, matching the y axis and every allowable in DielectricStress. Two units in one window is how a stress gets
+    /// misread by a factor of a thousand - see the unit note in AxisScale.UnitScale.
+    private static func Annotation(for profile:Profile) -> [(label:String, value:String)] {
+
+        guard let worst = profile.worst else {
+
+            return []
+        }
+
+        return [(label: "Maximum stress:", value: String(format: "%.2f kV/mm", worst.stress / 1.0E6)),
+                (label: "At height:", value: String(format: "%.0f mm", worst.z * 1000.0)),
+                (label: "ΔV there:", value: String(format: "%.2f kV", worst.deltaV / 1000.0)),
+                (label: "Allowable ΔV there:", value: String(format: "%.2f kV  (at %.2f kV/mm)", worst.allowableDeltaV / 1000.0, worst.allowableStress / 1.0E6)),
+                (label: "Utilization:", value: String(format: "%.0f%% of allowable", worst.utilization * 100.0))]
+    }
+
+    private static func Note(for profile:Profile) -> String {
 
         var note = "Envelope: the worst disc-to-disc stress each gap saw at any instant of the run, one point per gap, joined by straight lines. Allowables are DelVecchio ch. 13 impulse breakdown levels at the governing layer's own thickness, times the design margin set in Preferences."
 
@@ -264,6 +288,71 @@ class AxialStressProfileWindow:NSWindowController {
             note += " The allowable is not the same the length of this coil — where the gap or its insulation changes, so does what that gap is allowed — so it is drawn as a curve rather than as one rule."
         }
 
-        noteLabel.stringValue = note
+        return note
     }
+
+    @objc private func handleSaveAsExcel(_ sender:Any) {
+
+        guard let window = self.window else {
+
+            return
+        }
+
+        ProfileWorkbook.Save(self, from: window)
+    }
+}
+
+// MARK: Saving as Excel
+
+extension AxialStressProfileWindow:ProfileWorkbookSource {
+
+    /// One sheet per coil: the gaps as a table, and the window's graph redrawn from it as an Excel chart.
+    ///
+    /// Every coil rather than only the one on screen - the picker is how the window shows more than one coil at a time, and a
+    /// workbook has tabs for that. It opens on the coil that is on screen.
+    func WorkbookSheets() -> [ProfileWorkbook.Sheet] {
+
+        return profiles.map { profile in
+
+            let points = profile.points
+            let range = ProfileWorkbook.HeightRange(points.map { $0.z })
+
+            let columns = [ProfileWorkbook.Column(heading: "Height above bottom yoke (mm)", decimals: 1, values: points.map { .number($0.z * 1000.0) }),
+                           ProfileWorkbook.Column(heading: "Average stress (kV/mm)", decimals: 3, values: points.map { .number($0.stress / 1.0E6) }),
+                           ProfileWorkbook.Column(heading: "Allowable stress (kV/mm)", decimals: 3, values: points.map { .number($0.allowableStress / 1.0E6) }),
+                           ProfileWorkbook.Column(heading: "ΔV across gap (kV)", decimals: 2, values: points.map { .number($0.deltaV / 1000.0) }),
+                           ProfileWorkbook.Column(heading: "Allowable ΔV (kV)", decimals: 2, values: points.map { .number($0.allowableDeltaV / 1000.0) }),
+                           ProfileWorkbook.Column(heading: "Utilization (%)", decimals: 1, values: points.map { .number($0.utilization * 100.0) })]
+
+            var series = [ProfileWorkbook.Series(name: "Average stress", source: .columns(x: 0, y: 1), look: .line(color: ProfileWorkbook.Colour.value, width: 1.5, dashed: false)),
+                          ProfileWorkbook.Series(name: "Allowable", source: .columns(x: 0, y: 2), look: .line(color: ProfileWorkbook.Colour.allowable, width: 1.5, dashed: true))]
+
+            if let worst = profile.worst {
+
+                series.append(ProfileWorkbook.Series(name: "Worst gap", source: .points([ProfileWorkbook.XY(x: worst.z * 1000.0, y: worst.stress / 1.0E6)]), look: .dot(color: ProfileWorkbook.Colour.value), inLegend: false))
+            }
+
+            let chart = ProfileWorkbook.Chart(title: "Disc-to-disc stress — \(profile.name)",
+                                              xTitle: "Height above bottom yoke (mm)",
+                                              yTitle: "Average stress (kV/mm)",
+                                              xMinimum: range?.minimum,
+                                              xMaximum: range?.maximum,
+                                              xMajorUnit: 100.0,
+                                              series: series)
+
+            let info = ProfileWorkbook.StandardInfo(designName: designName)
+                     + ProfileWorkbook.Info(AxialStressProfileWindow.Annotation(for: profile))
+                     + [ProfileWorkbook.InfoRow(label: "Note:", value: AxialStressProfileWindow.Note(for: profile))]
+
+            return ProfileWorkbook.Sheet(name: profile.name,
+                                         title: "Disc-to-Disc Stress vs. Height — \(profile.name)",
+                                         info: info,
+                                         columns: columns,
+                                         charts: [chart])
+        }
+    }
+
+    var workbookActiveSheet:Int { profilePicker.indexOfSelectedItem }
+
+    var workbookFileName:String { [designName, "Axial Stress Profiles"].compactMap { $0 }.joined(separator: " ") }
 }

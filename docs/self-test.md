@@ -24,7 +24,7 @@ Add `-PCH_SelfTestTransient YES` for the frequency-domain sweep as well, and `-P
 to **render the result graphs to PNGs** beside the report — `SelfTestGraph-<scenario>-axialStress.png`, `-radialStress.png` and,
 for every sheet or layer winding in the model, `-radialProfile-coil<n>.png`. All three come out of `StressProfileView`, which they
 share and so break together; the radial *profile* is the one whose x axis is not a height, which is exactly what a shared view is
-most likely to get wrong. Its numbers go into the report as a line too, so a change of shape shows up without opening the PNG. That flag exists
+most likely to get wrong. Its numbers go into the report as a line too, so a change of shape shows up without opening the PNG. Beside each PNG is the window's **Save as Excel…** workbook, `SelfTestGraph-<scenario>-<what>.xlsx`, and the report gives its sheet, row and chart counts. That flag exists
 because the numbers behind a graph can be asserted and the drawing cannot: a curve running off its axis, an annotation box sitting
 on the line it describes, or a tick label overwriting its neighbour are invisible to any check worth writing, and are exactly what
 goes wrong when a plot is edited. The window is built the way the menu item builds it and drawn with `cacheDisplay(in:to:)`, so it

@@ -3844,6 +3844,27 @@ enum SelfTest {
 
                 text += "  FAILED writing the \(what) graph: \(error)\n"
             }
+
+            // The same window's "Save as Excel…", written beside the PNG, so the export runs headless with the drawing it copies. The
+            // report lists what went into it - sheets, rows and charts - so a change in the layout shows up without opening Excel.
+            if let source = controller as? ProfileWorkbookSource {
+
+                let sheets = source.WorkbookSheets()
+                let workbookURL = documents.appendingPathComponent("SelfTestGraph-\(scenario.name)-\(what).xlsx")
+
+                do {
+
+                    try ProfileWorkbook.Write(sheets: sheets, activeSheet: source.workbookActiveSheet, to: workbookURL)
+
+                    let rows = sheets.map { $0.columns.map { $0.values.count }.max() ?? 0 }.reduce(0, +)
+                    let charts = sheets.map { $0.charts.count }.reduce(0, +)
+                    text += "  \(workbookURL.lastPathComponent) (\(sheets.count) sheets, \(rows) rows, \(charts) charts)\n"
+                }
+                catch {
+
+                    text += "  FAILED writing the \(what) workbook: \(error.localizedDescription)\n"
+                }
+            }
         }
 
         return text + "\n"

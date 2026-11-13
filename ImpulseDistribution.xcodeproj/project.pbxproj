@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F5C0E1100000000000000001 /* libxlsxwriter in Frameworks */ = {isa = PBXBuildFile; productRef = F5C0E1100000000000000002 /* libxlsxwriter */; };
+		F5C0E1100000000000000003 /* ProfileWorkbook.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C0E1100000000000000004 /* ProfileWorkbook.swift */; };
 		D30D3AD8270E2F2C00A39051 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D30D3AD7270E2F2C00A39051 /* AppDelegate.swift */; };
 		D30D3ADA270E2F2D00A39051 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D30D3AD9270E2F2D00A39051 /* Assets.xcassets */; };
 		D30D3ADD270E2F2D00A39051 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = D30D3ADB270E2F2D00A39051 /* MainMenu.xib */; };
@@ -66,6 +68,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F5C0E1100000000000000004 /* ProfileWorkbook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileWorkbook.swift; sourceTree = "<group>"; };
 		D30D3AD4270E2F2C00A39051 /* ImpulseDistribution.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ImpulseDistribution.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D30D3AD7270E2F2C00A39051 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		D30D3AD9270E2F2D00A39051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -132,6 +135,7 @@
 				F561C3CC2B4838AF00C9CEDE /* PchExcelDesignFilePackage in Frameworks */,
 				D3F020112B1BBF4200CBD0F0 /* ComplexModule in Frameworks */,
 				F561C3D32B4B528800C9CEDE /* PchAxiSymFE in Frameworks */,
+				F5C0E1100000000000000001 /* libxlsxwriter in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -186,6 +190,7 @@
 				F5A15CE32C0A130000000031 /* AxialStressProfileWindow.swift */,
 				F5A15CE32C0A130000000051 /* RadialProfileWindow.swift */,
 				F5A15CE32C0A130000000041 /* StressProfileView.swift */,
+				F5C0E1100000000000000004 /* ProfileWorkbook.swift */,
 				F5A15CE42C0A140000000001 /* TurnLadderModel.swift */,
 				F531E27C2B7C0B9F004DE02F /* WaveFormDisplayWindow.swift */,
 				F531E27D2B7C0B9F004DE02F /* WaveFormDisplayWindow.xib */,
@@ -243,6 +248,7 @@
 				F561C3CD2B4838AF00C9CEDE /* PchMatrixPackage */,
 				F561C3CF2B4838AF00C9CEDE /* PchProgressIndicatorPackage */,
 				F561C3D22B4B528800C9CEDE /* PchAxiSymFE */,
+				F5C0E1100000000000000002 /* libxlsxwriter */,
 			);
 			productName = ImpulseDistribution;
 			productReference = D30D3AD4270E2F2C00A39051 /* ImpulseDistribution.app */;
@@ -276,6 +282,7 @@
 				D3F0200F2B1BBF4200CBD0F0 /* XCRemoteSwiftPackageReference "swift-numerics" */,
 				F561C3C62B4838AF00C9CEDE /* XCRemoteSwiftPackageReference "PchBasePackage" */,
 				F5AA15FE2C0A140000000001 /* XCLocalSwiftPackageReference "../PchAxiSymFePackage" */,
+				F5C0E1100000000000000005 /* XCRemoteSwiftPackageReference "libxlsxwriter" */,
 			);
 			productRefGroup = D30D3AD5270E2F2C00A39051 /* Products */;
 			projectDirPath = "";
@@ -329,6 +336,7 @@
 				F5A15CE32C0A130000000032 /* AxialStressProfileWindow.swift in Sources */,
 				F5A15CE32C0A130000000052 /* RadialProfileWindow.swift in Sources */,
 				F5A15CE32C0A130000000042 /* StressProfileView.swift in Sources */,
+				F5C0E1100000000000000003 /* ProfileWorkbook.swift in Sources */,
 				F5A15CE42C0A140000000002 /* TurnLadderModel.swift in Sources */,
 				D3B7FF22270E320E002537D3 /* BasicSection.swift in Sources */,
 				D3FB7D6A2752B7A3009ACCB4 /* Connector.swift in Sources */,
@@ -510,7 +518,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3098F81E;
+				CURRENT_PROJECT_VERSION = 30A760FC;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -543,7 +551,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3098F81E;
+				CURRENT_PROJECT_VERSION = 30A760FC;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -598,6 +606,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		F5C0E1100000000000000005 /* XCRemoteSwiftPackageReference "libxlsxwriter" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jmcnamara/libxlsxwriter.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.4;
+			};
+		};
 		D3F0200F2B1BBF4200CBD0F0 /* XCRemoteSwiftPackageReference "swift-numerics" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-numerics.git";
@@ -617,6 +633,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		F5C0E1100000000000000002 /* libxlsxwriter */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F5C0E1100000000000000005 /* XCRemoteSwiftPackageReference "libxlsxwriter" */;
+			productName = libxlsxwriter;
+		};
 		D3F020102B1BBF4200CBD0F0 /* ComplexModule */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D3F0200F2B1BBF4200CBD0F0 /* XCRemoteSwiftPackageReference "swift-numerics" */;

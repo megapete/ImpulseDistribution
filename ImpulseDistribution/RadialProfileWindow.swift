@@ -159,11 +159,15 @@ class RadialProfileWindow:NSWindowController {
     private let notes:[(label:String, value:String)]
     private let equalSpacing:EqualSpacingComparison?
     private let peakTestVoltage:Double
+    private let coil:Int
+    /// The design file's name, for the saved workbook. Nil where the model did not come from a file.
+    private let designName:String?
 
     private let graphView = StressProfileView()
     private let noteLabel = NSTextField(labelWithString: "")
+    private let saveButton = NSButton(title: "Save as Excel…", target: nil, action: nil)
 
-    init(contents:Contents, peakTestVoltage:Double) {
+    init(contents:Contents, peakTestVoltage:Double, designName:String? = nil) {
 
         self.points = contents.points.sorted { $0.index < $1.index }
         self.isSheet = contents.isSheet
@@ -175,6 +179,8 @@ class RadialProfileWindow:NSWindowController {
         self.notes = contents.notes
         self.equalSpacing = contents.equalSpacing
         self.peakTestVoltage = peakTestVoltage
+        self.coil = contents.coil
+        self.designName = designName
 
         let coil = contents.coil
         let isSheet = contents.isSheet
@@ -217,8 +223,15 @@ class RadialProfileWindow:NSWindowController {
 
         graphView.translatesAutoresizingMaskIntoConstraints = false
 
+        saveButton.bezelStyle = .rounded
+        saveButton.target = self
+        saveButton.action = #selector(handleSaveAsExcel(_:))
+        saveButton.toolTip = "Save this coil's gaps - the numbers and the chart - as an Excel workbook"
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
         contentView.addSubview(noteLabel)
         contentView.addSubview(graphView)
+        contentView.addSubview(saveButton)
 
         NSLayoutConstraint.activate([
 
@@ -229,7 +242,10 @@ class RadialProfileWindow:NSWindowController {
             graphView.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
             graphView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
             graphView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            graphView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+            graphView.bottomAnchor.constraint(equalTo: saveButton.topAnchor, constant: -8),
+
+            saveButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
+            saveButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
         ])
 
         window.contentView = contentView
@@ -424,4 +440,110 @@ class RadialProfileWindow:NSWindowController {
             noteLabel.stringValue = "Layer winding: solved as a turn-level capacitive network at the stated instant — turn-to-turn along each layer, layer-to-layer between them, and out of the innermost and outermost layers to the neighbouring coils at their own potentials. Every layer is assumed to hold the same number of turns — N/L, fractions included, so the layers step axially as the boundary walks through a turn — and the cooling ducts are placed at evenly spaced gaps; the design file gives counts and sizes but neither per-layer turns nor duct positions, so both are rules rather than readings. A ducted gap has a much lower layer-to-layer capacitance and so carries much more voltage — and is allowed a great deal more of it — so the worst gap WITH a duct and the worst gap WITHOUT one are reported separately, and the one nearer its allowable is marked as governing. The last pair of rows is a different site again: the worst two axially adjacent turns within a layer, across one turn's own paper. The reference is the textbook figure, twice the volts per layer."
         }
     }
+
+    @objc private func handleSaveAsExcel(_ sender:Any) {
+
+        guard let window = self.window else {
+
+            return
+        }
+
+        ProfileWorkbook.Save(self, from: window)
+    }
+}
+
+// MARK: Saving as Excel
+
+extension RadialProfileWindow:ProfileWorkbookSource {
+
+    /// One sheet: every gap as a row, and the window's graph redrawn from the table.
+    ///
+    /// Volts rather than the window's kV, and in Excel's General format: the annotation block speaks in volts (see `Volts`), a
+    /// turn-to-turn gap carries tens to hundreds of them, and a coil grounded at both ends carries nanovolts that a fixed number
+    /// of kV decimals would print as a misleading zero.
+    func WorkbookSheets() -> [ProfileWorkbook.Sheet] {
+
+        var columns = [ProfileWorkbook.Column(heading: isSheet ? "Gap between turns (from inside)" : "Gap between layers (from inside)", decimals: 0, values: points.map { .number(Double($0.index + 1)) }),
+                       ProfileWorkbook.Column(heading: "Radius (mm)", decimals: 2, values: points.map { .number($0.radius * 1000.0) }),
+                       ProfileWorkbook.Column(heading: "ΔV across gap (V)", decimals: nil, values: points.map { .number($0.deltaV) }),
+                       ProfileWorkbook.Column(heading: "Allowable ΔV (V)", decimals: nil, values: points.map { .of($0.allowableDeltaV) }),
+                       ProfileWorkbook.Column(heading: "Utilization (%)", decimals: 2, values: points.map { $0.allowableDeltaV == nil ? .empty : .number($0.utilization * 100.0) }),
+                       ProfileWorkbook.Column(heading: "Cooling duct", decimals: nil, values: points.map { $0.hasDuct ? .text("Yes") : .empty }),
+                       ProfileWorkbook.Column(heading: "Governing material", decimals: nil, values: points.map { .text($0.material) })]
+
+        if !isSheet {
+
+            columns.append(ProfileWorkbook.Column(heading: "Height of worst ΔV (mm)", decimals: 0, values: points.map { .of($0.worstHeight.map { $0 * 1000.0 }) }))
+        }
+
+        let equalSpacingColumn = columns.count
+
+        if let equalSpacing {
+
+            columns.append(ProfileWorkbook.Column(heading: "Equal-spacing ΔV (V)", decimals: nil, values: equalSpacing.deltaV.map { .number($0) }))
+        }
+
+        var series:[ProfileWorkbook.Series] = []
+
+        // The comparison first, and thinner, as in the window, so that where they coincide the profile is the one on top.
+        if equalSpacing != nil {
+
+            series.append(ProfileWorkbook.Series(name: "Equal spacing", source: .columns(x: 0, y: equalSpacingColumn), look: .line(color: ProfileWorkbook.Colour.comparison, width: 1.0, dashed: false)))
+        }
+
+        series.append(ProfileWorkbook.Series(name: "ΔV across gap", source: .columns(x: 0, y: 2), look: .line(color: ProfileWorkbook.Colour.value, width: 1.5, dashed: false)))
+
+        // The SAME off-scale rule the window applies - see StressProfileView.allowableScaleLimit - so the chart and the screen agree
+        // about whether the allowable is drawn. It is in the table either way.
+        let peakValue = (points.map { $0.deltaV } + (equalSpacing?.deltaV ?? [])).max() ?? 0.0
+        let allowableIsOnScale = (points.compactMap { $0.allowableDeltaV }.max() ?? 0.0) <= StressProfileView.allowableScaleLimit * peakValue
+
+        if allowableIsOnScale {
+
+            series.append(ProfileWorkbook.Series(name: "Allowable", source: .columns(x: 0, y: 3), look: .line(color: ProfileWorkbook.Colour.allowable, width: 1.5, dashed: true)))
+        }
+
+        // The window's dot is on the plot's worst point, by utilization - StressProfileView.Plot.worst.
+        if let worst = points.max(by: { $0.utilization < $1.utilization }) {
+
+            series.append(ProfileWorkbook.Series(name: "Worst gap", source: .points([ProfileWorkbook.XY(x: Double(worst.index + 1), y: worst.deltaV)]), look: .dot(color: ProfileWorkbook.Colour.value), inLegend: false))
+        }
+
+        let gapCount = Double(max(points.count, 1))
+        let interval = StressProfileView.XAxis.ordinal(title: "").Interval(from: 1.0, to: gapCount)
+
+        let chart = ProfileWorkbook.Chart(title: "Radial voltage profile — coil \(coil), \(isSheet ? "sheet" : "layer") winding",
+                                          xTitle: isSheet ? "Gap between turns, counted outwards from the inside" : "Gap between layers, counted outwards from the inside",
+                                          yTitle: "ΔV across the gap (V)",
+                                          xMinimum: 1.0,
+                                          xMaximum: max(gapCount, 2.0),
+                                          xMajorUnit: interval,
+                                          series: series)
+
+        var info = ProfileWorkbook.StandardInfo(designName: designName)
+                 + [ProfileWorkbook.InfoRow(label: "Peak test voltage:", value: String(format: "%.1f kV", peakTestVoltage / 1000.0)),
+                    ProfileWorkbook.InfoRow(label: "Reference ΔV:", value: RadialProfileWindow.Volts(reference))]
+                 + ProfileWorkbook.Info(currentAnnotation)
+
+        if !allowableIsOnScale {
+
+            info.append(ProfileWorkbook.InfoRow(label: "Allowable:", value: "off the chart's scale, as it is on screen - it is in the table"))
+        }
+
+        info.append(ProfileWorkbook.InfoRow(label: "Note:", value: noteLabel.stringValue))
+
+        return [ProfileWorkbook.Sheet(name: "Coil \(coil)",
+                                      title: "Radial Voltage Profile — coil \(coil), \(isSheet ? "sheet" : "layer") winding",
+                                      info: info,
+                                      columns: columns,
+                                      charts: [chart])]
+    }
+
+    /// The window's annotation rows. The window has one profile and builds them once, so they are read back off the plot rather
+    /// than built a second time.
+    private var currentAnnotation:[(label:String, value:String)] { graphView.plot?.annotation ?? [] }
+
+    var workbookActiveSheet:Int { 0 }
+
+    var workbookFileName:String { [designName, "Radial Voltage Profile coil \(coil)"].compactMap { $0 }.joined(separator: " ") }
 }

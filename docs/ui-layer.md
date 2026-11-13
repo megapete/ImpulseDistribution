@@ -124,6 +124,31 @@ Six things about them are deliberate:
   no room to its right). Past that height the field is genuinely two-dimensional and the plotted value is indicative only —
   `TODO.md` item 11. The note said so already; the rule says *where*, which is the half that matters when reading a curve.
 
+### Saving a profile as Excel (`ProfileWorkbook.swift`)
+
+Each of the three windows has a **Save as Excel…** button at the bottom, the same arrangement as PchMagneticFlux's tap-position
+and short-circuit reports. It writes an `.xlsx` through **libxlsxwriter** (SwiftPM, `github.com/jmcnamara/libxlsxwriter`, from
+1.2.4). There is no "export everything" command, on purpose: the user picks a window and saves that one.
+
+- **One sheet per profile the window can show**, in picker order, and the workbook opens on the one that is on screen. The axial
+  window gives one sheet per coil and the radial stress window one per coil pair. The radial voltage profile gives a single sheet.
+- **A sheet is the window, as data.** It has a title, then label/value rows (design file, date, program version and build, then
+  the window's annotation rows *word for word* and its note), then a table, with the chart beside the table. The radial stress
+  sheet carries **both** charts, ΔV and stress, because the table has both and the window's quantity picker is only how it fits
+  them into one plot.
+- **The chart series are cell references into the table**, not copies of the numbers, so a reader can never see a chart and a table
+  that disagree. The worst-point dot and the coil-end rules are not columns of the table. They go in a small chart-data block to
+  the right of the chart, and they are left out of the legend.
+- **Same rules as the screen:** worst by utilization, a y axis from zero, the same colours, the allowable dashed. The radial
+  voltage profile leaves the allowable off the chart under exactly `StressProfileView.allowableScaleLimit`, and a header row says
+  so. Units are the screen's, mm, kV and kV/mm, except the radial voltage profile, which is in **volts, in General format**,
+  because its annotation already speaks in volts and a coil grounded at both ends puts nanovolts in that column.
+- **`ProfileWorkbook.swift` is the only file that touches the C API.** `Write` is synchronous and nonisolated, so no `lxw_*`
+  pointer is ever live across an `await`. It writes with `fopen`, so it must be given a path the save panel granted, or the
+  container.
+- SelfTest writes the same workbook beside every graph PNG (`-PCH_SelfTestGraphs YES`), and the report lists each workbook's
+  sheet, row and chart counts. See `docs/self-test.md`.
+
 ## Dialogs / windows
 
 (`*.swift` + matching `*.xib`): `GetNumberDialog`, `GetSimDetailsDialog`, `ShowCoilResultsDialog`, `ShowWaveFormsDialog`,

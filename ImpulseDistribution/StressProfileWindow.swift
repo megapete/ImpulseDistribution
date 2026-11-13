@@ -74,13 +74,16 @@ class StressProfileWindow:NSWindowController {
 
     private let profiles:[Profile]
     private let peakTestVoltage:Double
+    /// The design file's name, for the saved workbook. Nil where the model did not come from a file.
+    private let designName:String?
 
     private let graphView = StressProfileView()
     private let profilePicker = NSPopUpButton()
     private let quantityPicker = NSPopUpButton()
     private let noteLabel = NSTextField(labelWithString: "")
+    private let saveButton = NSButton(title: "Save as Excel…", target: nil, action: nil)
 
-    init?(checks:[DielectricStress.StressCheck], peakTestVoltage:Double, title:String) {
+    init?(checks:[DielectricStress.StressCheck], peakTestVoltage:Double, title:String, designName:String? = nil) {
 
         // Assemble the profiles from the SAME findings the table shows, so the two can never disagree.
         var grouped:[String:[DielectricStress.StressCheck]] = [:]
@@ -141,6 +144,7 @@ class StressProfileWindow:NSWindowController {
 
         self.profiles = built
         self.peakTestVoltage = peakTestVoltage
+        self.designName = designName
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 520),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -196,10 +200,17 @@ class StressProfileWindow:NSWindowController {
 
         graphView.translatesAutoresizingMaskIntoConstraints = false
 
+        saveButton.bezelStyle = .rounded
+        saveButton.target = self
+        saveButton.action = #selector(handleSaveAsExcel(_:))
+        saveButton.toolTip = "Save every profile - the numbers, and a chart of both the voltage difference and the stress - as an Excel workbook"
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
         contentView.addSubview(profilePicker)
         contentView.addSubview(quantityPicker)
         contentView.addSubview(noteLabel)
         contentView.addSubview(graphView)
+        contentView.addSubview(saveButton)
 
         NSLayoutConstraint.activate([
 
@@ -218,7 +229,10 @@ class StressProfileWindow:NSWindowController {
             graphView.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
             graphView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
             graphView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            graphView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+            graphView.bottomAnchor.constraint(equalTo: saveButton.topAnchor, constant: -8),
+
+            saveButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
+            saveButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
         ])
 
         window.contentView = contentView
@@ -256,6 +270,21 @@ class StressProfileWindow:NSWindowController {
                                     utilization: $0.utilization)
         }
 
+        // peakTestVoltage sets the major-tick interval of a voltage axis only - a stress axis is always labelled in kV/mm.
+        graphView.plot = StressProfileView.Plot(points: points,
+                                                quantity: showingVolts ? .voltage : .stress,
+                                                peakTestVoltage: showingVolts ? peakTestVoltage : 0.0,
+                                                annotation: StressProfileWindow.Annotation(for: profile, showingVolts: showingVolts),
+                                                markers: profile.endMarkers,
+                                                markerName: "inner coil ends")
+
+        noteLabel.stringValue = StressProfileWindow.Note(for: profile, what: showingVolts ? "radial voltage difference" : "average radial stress")
+    }
+
+    /// The annotation block's rows, which the saved workbook repeats word for word (the voltage version, whose rows carry the
+    /// stress as well).
+    private static func Annotation(for profile:Profile, showingVolts:Bool) -> [(label:String, value:String)] {
+
         var annotation:[(label:String, value:String)] = []
 
         if let worst = profile.worst {
@@ -271,15 +300,11 @@ class StressProfileWindow:NSWindowController {
                           (label: "Utilization:", value: String(format: "%.0f%% of allowable", worst.utilization * 100.0))]
         }
 
-        // peakTestVoltage sets the major-tick interval of a voltage axis only - a stress axis is always labelled in kV/mm.
-        graphView.plot = StressProfileView.Plot(points: points,
-                                                quantity: showingVolts ? .voltage : .stress,
-                                                peakTestVoltage: showingVolts ? peakTestVoltage : 0.0,
-                                                annotation: annotation,
-                                                markers: profile.endMarkers,
-                                                markerName: "inner coil ends")
+        return annotation
+    }
 
-        let what = showingVolts ? "radial voltage difference" : "average radial stress"
+    /// The note under the pickers. `what` names the quantity on the y axis.
+    private static func Note(for profile:Profile, what:String) -> String {
 
         var note = "Envelope: the largest \(what) each height saw at any time during the run, against what that height is allowed."
 
@@ -289,11 +314,100 @@ class StressProfileWindow:NSWindowController {
             note += " The inner coil ends near \(heights) mm (marked) — beyond that the field is genuinely two-dimensional and the plotted value is indicative only."
         }
 
-        if let plot = graphView.plot, !plot.allowableIsConstant {
+        let allowables = profile.points.map { $0.allowableField }
+
+        if let first = allowables.first, !allowables.allSatisfy({ abs($0 - first) <= 1.0E-9 * max(1.0, first) }) {
 
             note += " The allowable varies over this profile — the layer thickness governing it is not the same at every height — so it is drawn as a curve rather than as one rule."
         }
 
-        noteLabel.stringValue = note
+        return note
     }
+
+    @objc private func handleSaveAsExcel(_ sender:Any) {
+
+        guard let window = self.window else {
+
+            return
+        }
+
+        ProfileWorkbook.Save(self, from: window)
+    }
+}
+
+// MARK: Saving as Excel
+
+extension StressProfileWindow:ProfileWorkbookSource {
+
+    /// One sheet per profile, with BOTH of the window's graphs on it - the voltage difference and the stress - since the table
+    /// carries both and the quantity picker is only how the window fits them into one plot.
+    func WorkbookSheets() -> [ProfileWorkbook.Sheet] {
+
+        return profiles.map { profile in
+
+            let points = profile.points
+            let range = ProfileWorkbook.HeightRange(points.map { $0.z })
+
+            let columns = [ProfileWorkbook.Column(heading: "Height above bottom yoke (mm)", decimals: 1, values: points.map { .number($0.z * 1000.0) }),
+                           ProfileWorkbook.Column(heading: "ΔV (kV)", decimals: 2, values: points.map { .number($0.deltaV / 1000.0) }),
+                           ProfileWorkbook.Column(heading: "Allowable ΔV (kV)", decimals: 2, values: points.map { .number($0.allowableDeltaV / 1000.0) }),
+                           ProfileWorkbook.Column(heading: "Average stress (kV/mm)", decimals: 3, values: points.map { .number($0.averageField / 1.0E6) }),
+                           ProfileWorkbook.Column(heading: "Allowable stress (kV/mm)", decimals: 3, values: points.map { .number($0.allowableField / 1.0E6) }),
+                           ProfileWorkbook.Column(heading: "Utilization (%)", decimals: 1, values: points.map { .number($0.utilization * 100.0) })]
+
+            /// One of the two graphs. `value` and `allowable` are table columns; `scale` turns a point's SI value into them.
+            func Chart(title:String, yTitle:String, valueName:String, value:Int, allowable:Int, scale:(Point) -> (value:Double, allowable:Double)) -> ProfileWorkbook.Chart {
+
+                var series = [ProfileWorkbook.Series(name: valueName, source: .columns(x: 0, y: value), look: .line(color: ProfileWorkbook.Colour.value, width: 1.5, dashed: false)),
+                              ProfileWorkbook.Series(name: "Allowable", source: .columns(x: 0, y: allowable), look: .line(color: ProfileWorkbook.Colour.allowable, width: 1.5, dashed: true))]
+
+                // The coil-end rules run to the top of the data the way the window's run to the top of its plot.
+                let top = (points.map { max(scale($0).value, scale($0).allowable) }.max() ?? 0.0) * 1.08
+
+                for marker in profile.endMarkers {
+
+                    series.append(ProfileWorkbook.VerticalRule(at: marker * 1000.0, top: top, name: String(format: "Inner coil ends (%.0f mm)", marker * 1000.0)))
+                }
+
+                if let worst = profile.worst {
+
+                    series.append(ProfileWorkbook.Series(name: "Worst point", source: .points([ProfileWorkbook.XY(x: worst.z * 1000.0, y: scale(worst).value)]), look: .dot(color: ProfileWorkbook.Colour.value), inLegend: false))
+                }
+
+                return ProfileWorkbook.Chart(title: title,
+                                             xTitle: "Height above bottom yoke (mm)",
+                                             yTitle: yTitle,
+                                             xMinimum: range?.minimum,
+                                             xMaximum: range?.maximum,
+                                             xMajorUnit: 100.0,
+                                             series: series)
+            }
+
+            let charts = [Chart(title: "Radial voltage difference — \(profile.name)", yTitle: "ΔV (kV)", valueName: "ΔV", value: 1, allowable: 2,
+                                scale: { ($0.deltaV / 1000.0, $0.allowableDeltaV / 1000.0) }),
+                          Chart(title: "Average radial stress — \(profile.name)", yTitle: "Average stress (kV/mm)", valueName: "Average stress", value: 3, allowable: 4,
+                                scale: { ($0.averageField / 1.0E6, $0.allowableField / 1.0E6) })]
+
+            var info = ProfileWorkbook.StandardInfo(designName: designName)
+                     + [ProfileWorkbook.InfoRow(label: "Peak test voltage:", value: String(format: "%.1f kV", peakTestVoltage / 1000.0))]
+                     + ProfileWorkbook.Info(StressProfileWindow.Annotation(for: profile, showingVolts: true))
+
+            if !profile.endMarkers.isEmpty {
+
+                info.append(ProfileWorkbook.InfoRow(label: "Grey rules:", value: "where the inner coil ends"))
+            }
+
+            info.append(ProfileWorkbook.InfoRow(label: "Note:", value: StressProfileWindow.Note(for: profile, what: "radial voltage difference and average radial stress")))
+
+            return ProfileWorkbook.Sheet(name: profile.name,
+                                         title: "Radial Voltage Difference and Stress vs. Height — \(profile.name)",
+                                         info: info,
+                                         columns: columns,
+                                         charts: charts)
+        }
+    }
+
+    var workbookActiveSheet:Int { profilePicker.indexOfSelectedItem }
+
+    var workbookFileName:String { [designName, "Radial Stress Profiles"].compactMap { $0 }.joined(separator: " ") }
 }

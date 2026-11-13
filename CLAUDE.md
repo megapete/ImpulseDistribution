@@ -25,7 +25,7 @@ that was fixed once and must not come back.**
 | Frequency-domain solver, NILT, conductor impedance, `SimulationModel`, RK45, SPICE export | `docs/solver.md` |
 | Connectors, jumpers, terminations, `SetNodes`/`NodeAt`, tapping gaps, regulating-winding declarations | `docs/connectors-and-nodes.md` |
 | Segment indexing, static rings, radial shields, radial build-up | `docs/segments-and-geometry.md` |
-| `AppController`, `TransformerView`, graphs, `AxisScale`, dialogs | `docs/ui-layer.md` |
+| `AppController`, `TransformerView`, graphs, `AxisScale`, dialogs, Save as Excel | `docs/ui-layer.md` |
 | Progress bars, `AsyncStream` plumbing, bounded parallelism, `assumeIsolated` | `docs/concurrency.md` |
 | Running the app end-to-end without a keyboard; the test fixtures | `docs/self-test.md` |
 | What is still known to deviate from the books (open items) | `TODO.md` |
@@ -58,7 +58,7 @@ Eight `.swift` files sit in the source folder but are **not in the target's Comp
 | `PCH_GraphingView.swift`, `PCH_GraphingWindow.swift` | Dead; the only reference is inside a commented-out block in `AppController.swift`. |
 | `oldPchMatrixView*.swift` (3 files) | Legacy. |
 
-The compiled target is exactly these 38: `AppController`, `AppDelegate`, `AxialStressProfileWindow`, `AxisScale`, `BasicSection`, `CoilResultsDisplayView`, `CoilResultsDisplayWindow`, `ConductorImpedance`, `Connector`, `Core`, `DielectricStress`, `FePhase`, `FrequencyDomainSolver`, `GetNumberDialog`, `GetSimDetailsDialog`, `GetWoundInShieldDialog`, `InitialDistributionWindow`, `Node`, `NumericalLaplaceTransform`, `PhaseModel`, `Preferences`, `PreferencesDialog`, `RadialProfileWindow`, `RegulatingWinding`, `RegulatingWindingDialog`, `Segment`, `SelfTest`, `ShowCoilResultsDialog`, `ShowWaveFormsDialog`, `SimulationModel`, `StressProfileView`, `StressProfileWindow`, `StressReportWindow`, `TransformerView`, `TurnLadderModel`, `WaveFormDisplayView`, `WaveFormDisplayWindow`, `Wiring`.
+The compiled target is exactly these 39: `AppController`, `AppDelegate`, `AxialStressProfileWindow`, `AxisScale`, `BasicSection`, `CoilResultsDisplayView`, `CoilResultsDisplayWindow`, `ConductorImpedance`, `Connector`, `Core`, `DielectricStress`, `FePhase`, `FrequencyDomainSolver`, `GetNumberDialog`, `GetSimDetailsDialog`, `GetWoundInShieldDialog`, `InitialDistributionWindow`, `Node`, `NumericalLaplaceTransform`, `PhaseModel`, `Preferences`, `PreferencesDialog`, `ProfileWorkbook`, `RadialProfileWindow`, `RegulatingWinding`, `RegulatingWindingDialog`, `Segment`, `SelfTest`, `ShowCoilResultsDialog`, `ShowWaveFormsDialog`, `SimulationModel`, `StressProfileView`, `StressProfileWindow`, `StressReportWindow`, `TransformerView`, `TurnLadderModel`, `WaveFormDisplayView`, `WaveFormDisplayWindow`, `Wiring`.
 
 **When adding a `.swift` file, add it to the Compile Sources phase.** Eight files in this folder are already orphaned, and SourceKit reports a misleading `No such module 'PchBasePackage'` on a file that is not in the target — that diagnostic means "not in Compile Sources", not "package missing".
 
@@ -70,6 +70,7 @@ Resolved packages live in `ImpulseDistribution.xcodeproj/.../swiftpm/Package.res
 - `PchAxiSymFE` (from `PchAxiSymFePackage`) — the 2D axisymmetric finite-element library. **This is the path actually used to compute the inductance matrix and the eddy losses**, and the electrostatic reference for the coil-to-coil shunt capacitances (TODO item 6d). It is referenced as a **local package** at `../PchAxiSymFePackage`, not from GitHub, so it is edited in place and every build takes the working copy. The app talks to it through exactly one file, `ImpulseDistribution/FePhase.swift` — read that file's header before changing anything about the FE model. It replaced `PchFiniteElementPackage` (`PchFePhase`), which the project no longer references at all.
 - `PchExcelDesignFilePackage` (in `PchBasePackage`) reads design file versions 4 to 6. **Opening a version 5 or 6 file puts its intershields and static rings on the model**, and the layout takes the shields' radial build out first so that `ApplyRadialBuildUp` does not count it twice. Read the last section of `docs/segments-and-geometry.md` before touching `createBasicSections` or the load path.
 - `PchMatrixPackage`, `PchExcelDesignFilePackage`, `PchDialogBoxPackage`, `PchProgressIndicatorPackage` — matrix ops, Excel design-file import, dialogs, progress UI.
+- `libxlsxwriter` (github.com/jmcnamara/libxlsxwriter, C) — writes the profile windows' **Save as Excel…** workbooks, charts included. Only `ProfileWorkbook.swift` imports it; see `docs/ui-layer.md`.
 - `swift-numerics` (`ComplexModule`, `RealModule`) — complex/real math used by the matrix and inductance code.
 
 ## Domain model

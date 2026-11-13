@@ -2502,7 +2502,8 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
 
             guard let profileWindow = StressProfileWindow(checks: checks,
                                                           peakTestVoltage: simResult.peakVoltage,
-                                                          title: "Radial Voltage Difference vs. Height") else {
+                                                          title: "Radial Voltage Difference vs. Height",
+                                                          designName: self.DesignName()) else {
 
                 PCH_ErrorAlert(message: "There are no radial profiles to show.", info: "Radial profiles are built from the coil-to-coil, coil-to-core and coil-to-tank checks, which need at least one coil with nodes in the model.")
                 return
@@ -2511,6 +2512,13 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             self.stressProfileWindow = profileWindow
             profileWindow.showWindow(self)
         }
+    }
+
+    /// The open design file's name without its extension, for what a saved workbook says it came from and what the save panel
+    /// offers to call it. Nil where the model was not opened from a file.
+    func DesignName() -> String? {
+
+        return self.currentDesignFileURL?.deletingPathExtension().lastPathComponent
     }
 
     @IBAction func handleShowAxialStressProfile(_ sender: Any) {
@@ -2524,7 +2532,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
                 return
             }
 
-            guard let profileWindow = AxialStressProfileWindow(checks: checks, title: "Disc-to-Disc Stress vs. Height") else {
+            guard let profileWindow = AxialStressProfileWindow(checks: checks, title: "Disc-to-Disc Stress vs. Height", designName: self.DesignName()) else {
 
                 PCH_ErrorAlert(message: "There is no axial stress profile to show.", info: "The profile is built from the disc-to-disc checks, which need at least one disc or helical winding with a node above and below it.")
                 return
@@ -2791,7 +2799,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
 
             let contents = try await AppController.BuildRadialProfile(model: phModel, segment: segment, instant: instant)
 
-            let window = RadialProfileWindow(contents: contents, peakTestVoltage: self.latestSimulationResult?.peakVoltage ?? 0.0)
+            let window = RadialProfileWindow(contents: contents, peakTestVoltage: self.latestSimulationResult?.peakVoltage ?? 0.0, designName: self.DesignName())
 
             self.radialProfileWindow = window
             window.showWindow(self)
