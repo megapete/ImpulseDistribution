@@ -1012,7 +1012,7 @@ enum DielectricStress {
         for (i, segment) in segments.enumerated() {
 
             // Bound separately: '||' takes an autoclosure, so the right-hand side would escape the await and trip actor isolation.
-            let wdgType = await segment.wdgType
+            let wdgType = segment.wdgType
 
             guard wdgType == .disc || wdgType == .helical else {
 
@@ -1026,7 +1026,7 @@ enum DielectricStress {
                 continue
             }
 
-            let basicSections = await segment.basicSections
+            let basicSections = segment.basicSections
 
             guard let bs = basicSections.first else {
 
@@ -1056,7 +1056,7 @@ enum DielectricStress {
                     }
 
                     let stacks = Segment.DiscToDiscLayerStack(basicSection: bs, gap: gap, facesStaticRing: false)
-                    let location = "Coil \(coil), segment \(await segment.axialPos), internal gap \(gapIndex + 1)"
+                    let location = "Coil \(coil), segment \(segment.axialPos), internal gap \(gapIndex + 1)"
 
                     result.append(StressSite(kind: .discToDisc,
                                              location: location,
@@ -1105,7 +1105,7 @@ enum DielectricStress {
                 let stacks = Segment.DiscToDiscLayerStack(basicSection: bs, gap: ringGap, facesStaticRing: true)
 
                 result.append(StressSite(kind: .discToDisc,
-                                         location: "Coil \(coil), segment \(await segment.axialPos) to static ring \(ringIsAbove ? "above" : "below"), worst at ID",
+                                         location: "Coil \(coil), segment \(segment.axialPos) to static ring \(ringIsAbove ? "above" : "below"), worst at ID",
                                          voltageTerms: [VoltageTerm(nodeIndex: nodes.above, weight: 1.0), VoltageTerm(nodeIndex: nodes.below, weight: -1.0)],
                                          columns: [stacks.keySpacer, stacks.oil],
                                          innerRadius: nil,
@@ -1163,7 +1163,7 @@ enum DielectricStress {
             // The rule holds for the plain continuous-disc case. Where either Segment holds more than one disc, or is interleaved,
             // the winding order across the gap is different and the crossover argument does not apply unchanged, so the direct node
             // difference is used and the location says so.
-            let aboveSectionCount = await above.basicSections.count
+            let aboveSectionCount = above.basicSections.count
             let thisInterleaved = await segment.interleaved
             let aboveInterleaved = await above.interleaved
             let plainContinuous = basicSections.count == 1 && aboveSectionCount == 1 && !thisInterleaved && !aboveInterleaved
@@ -1175,7 +1175,7 @@ enum DielectricStress {
 
                 terms = [VoltageTerm(nodeIndex: aboveNodes.above, weight: 1.0), VoltageTerm(nodeIndex: nodes.below, weight: -1.0)]
                 // The crossover alternates from gap to gap, so the far end alternates with it.
-                spanNote = (await segment.axialPos) % 2 == 0 ? ", worst at ID" : ", worst at OD"
+                spanNote = (segment.axialPos) % 2 == 0 ? ", worst at ID" : ", worst at OD"
             }
             else {
 
@@ -1183,7 +1183,7 @@ enum DielectricStress {
                 spanNote = isTappingGap ? ", across tapping gap" : ", single node step"
             }
 
-            let location = "Coil \(coil), gap above segment \(await segment.axialPos)\(spanNote)"
+            let location = "Coil \(coil), gap above segment \(segment.axialPos)\(spanNote)"
 
             result.append(StressSite(kind: .discToDisc,
                                      location: location,
@@ -1205,7 +1205,7 @@ enum DielectricStress {
 
         for segment in segments {
 
-            guard await segment.wdgType == .disc else {
+            guard segment.wdgType == .disc else {
 
                 continue
             }
@@ -1224,7 +1224,7 @@ enum DielectricStress {
                 continue
             }
 
-            guard let bs = await segment.basicSections.first else {
+            guard let bs = segment.basicSections.first else {
 
                 continue
             }
@@ -1255,7 +1255,7 @@ enum DielectricStress {
                                                               staticRing: staticRing)
 
                 let highest = (try? await model.GetHighestSection(coil: segment.radialPos)) ?? -1
-                let endDisc = (lowest: await segment.axialPos == 0, highest: await segment.axialPos == highest)
+                let endDisc = (lowest: segment.axialPos == 0, highest: segment.axialPos == highest)
 
                 enhancement = Segment.SteinParameters.For(Cs: Cs, Cdd: Cdd, endDisc: endDisc, adjStaticRing: staticRing).gradientEnhancement
             }
@@ -1276,7 +1276,7 @@ enum DielectricStress {
             let column = [DielectricLayer.Paper(tp / 2.0), DielectricLayer.Paper(tp / 2.0)]
 
             let note = interleaved ? " (interleaved)" : ""
-            let location = "Coil \(await segment.radialPos), segment \(await segment.axialPos), turn to turn\(note), enh \(String(format: "%.2f", enhancement))x"
+            let location = "Coil \(segment.radialPos), segment \(segment.axialPos), turn to turn\(note), enh \(String(format: "%.2f", enhancement))x"
 
             result.append(StressSite(kind: .turnToTurn,
                                      location: location,
@@ -1344,7 +1344,7 @@ enum DielectricStress {
             var farCornerRadius:Double? = nil
 
             if let ownSeg = await model.SegmentAt(location: LocStruct(radial: coil, axial: 0)),
-               let ownBS = await ownSeg.basicSections.first {
+               let ownBS = ownSeg.basicSections.first {
 
                 cornerRadius = CornerRadius(thickness: ownBS.wdgData.turn.strandRadial, width: ownBS.wdgData.turn.strandAxial)
                 farCornerRadius = cornerRadius
@@ -1353,7 +1353,7 @@ enum DielectricStress {
             if kind == .radialCoilToCoil,
                (try? await model.RadialShieldInside(coil: coil)) ?? nil == nil,
                let innerSeg = await model.SegmentAt(location: LocStruct(radial: coil - 1, axial: 0)),
-               let innerBS = await innerSeg.basicSections.first {
+               let innerBS = innerSeg.basicSections.first {
 
                 let innerPaper = DielectricLayer.Paper(innerBS.wdgData.turn.turnInsulation / 2.0)
 
@@ -1434,7 +1434,7 @@ enum DielectricStress {
 
             if tOil > 0.0 {
 
-                guard let bs = await outermost.basicSections.first else {
+                guard let bs = outermost.basicSections.first else {
 
                     return
                 }

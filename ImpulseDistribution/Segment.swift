@@ -355,7 +355,7 @@ actor Segment: Equatable /*, Hashable */ {
     let isRadialShield:Bool
     
     /// The type of the coil that owns this segment
-    var wdgType:BasicSectionWindingData.WdgType {
+    nonisolated var wdgType:BasicSectionWindingData.WdgType {
         
         return self.basicSections[0].wdgData.type
     }

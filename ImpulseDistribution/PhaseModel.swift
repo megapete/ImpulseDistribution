@@ -2082,8 +2082,8 @@ actor PhaseModel /*:Codable */ {
                 var axialGaps:(above:Double, below:Double)? = nil
                 var radialGaps:(inside:Double, outside:Double)? = nil
                 
-                var wdgIsDiscOrHelix = await nextSegment.wdgType == .disc
-                wdgIsDiscOrHelix = await nextSegment.wdgType == .helical || wdgIsDiscOrHelix
+                var wdgIsDiscOrHelix = nextSegment.wdgType == .disc
+                wdgIsDiscOrHelix = nextSegment.wdgType == .helical || wdgIsDiscOrHelix
                 if wdgIsDiscOrHelix {
                     
                     axialGaps = try await self.AxialSpacesAboutSegment(segment: nextSegment)
@@ -4342,8 +4342,8 @@ actor PhaseModel /*:Codable */ {
             throw PhaseModelError(info: "\(coil)", type: .CoilDoesNotExist)
         }
         
-        var wdgTypeIsDiscOrHelix = await bottomMostDisc.wdgType == .disc
-        wdgTypeIsDiscOrHelix = await bottomMostDisc.wdgType == .helical || wdgTypeIsDiscOrHelix
+        var wdgTypeIsDiscOrHelix = bottomMostDisc.wdgType == .disc
+        wdgTypeIsDiscOrHelix = bottomMostDisc.wdgType == .helical || wdgTypeIsDiscOrHelix
         if !wdgTypeIsDiscOrHelix {
 
             throw PhaseModelError(info: "", type: .NotADiscCoil)

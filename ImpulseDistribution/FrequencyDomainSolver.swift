@@ -140,6 +140,7 @@
 import Foundation
 import Accelerate
 import ComplexModule
+import RealModule
 import PchBasePackage
 import PchMatrixPackage
 

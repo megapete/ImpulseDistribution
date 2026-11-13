@@ -2587,7 +2587,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             // docs/decisions.md §8 - but never enforced, so a sheet, layer, interleaved or wound-in-shield Segment was quietly run
             // through the continuous-disc ladder and given a confident answer about a winding order the ladder does not model.
             // A sheet or layer winding now has a command of its own; the other two are refused, as the decision record says.
-            guard await segment.wdgType == .disc, await !segment.interleaved, await segment.woundInShield == nil, await segment.basicSections.count == 1 else {
+            guard segment.wdgType == .disc, await !segment.interleaved, await segment.woundInShield == nil, segment.basicSections.count == 1 else {
 
                 throw TurnLadderModel.LadderError.notContinuousDisc
             }
@@ -2596,7 +2596,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             let Ctt = try await segment.CapacitanceTurnToTurn()
             let gaps = try await phModel.AxialSpacesAboutSegment(segment: segment)
 
-            guard let bs = await segment.basicSections.first else {
+            guard let bs = segment.basicSections.first else {
 
                 PCH_ErrorAlert(message: "That segment has no basic sections.")
                 return
@@ -2620,7 +2620,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             let vEnd = instant.vAbove
 
             // A continuous disc winding alternates direction, so a disc at an even axial position winds outward.
-            let windsOutward = (await segment.axialPos) % 2 == 0
+            let windsOutward = (segment.axialPos) % 2 == 0
 
             let result = try TurnLadderModel.Solve(turnCount: turnCount,
                                                    Ctt: Ctt,
@@ -2644,7 +2644,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             }
 
             let alert = NSAlert()
-            alert.messageText = "Turn Ladder: \(turnCount) turns, disc at axial position \(await segment.axialPos)"
+            alert.messageText = "Turn Ladder: \(turnCount) turns, disc at axial position \(segment.axialPos)"
             alert.informativeText = """
             Disc voltage at its own worst instant (\(instant.label)): \(String(format: "%.1f kV", abs(vEnd - vStart) / 1000.0)).
 
@@ -2779,7 +2779,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
             return
         }
 
-        let wdgType = await segment.wdgType
+        let wdgType = segment.wdgType
 
         guard wdgType == .sheet || wdgType == .layer else {
 
@@ -2833,8 +2833,8 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
     /// axis is visible to an assertion. See SelfTest.RenderGraphs.
     static func BuildRadialProfile(model:PhaseModel, segment:Segment, instant:(vBelow:Double, vAbove:Double, label:String, volts:[Double])) async throws -> RadialProfileWindow.Contents {
 
-        let coil = await segment.radialPos
-        let wdgType = await segment.wdgType
+        let coil = segment.radialPos
+        let wdgType = segment.wdgType
         let profile:TurnLadderModel.RadialProfile
         let gapColumns:[[DielectricLayer]]
         /// Which gaps hold a cooling duct, gap for gap with the profile. The annotation reports the worst ducted gap and the worst
@@ -2848,7 +2848,7 @@ class AppController: NSObject, NSMenuItemValidation, NSWindowDelegate {
         let ductedGapCount:Int
         var equalSpacing:RadialProfileWindow.EqualSpacingComparison? = nil
 
-        guard let bs = await segment.basicSections.first else {
+        guard let bs = segment.basicSections.first else {
 
             throw TurnLadderModel.LadderError.noGaps
         }

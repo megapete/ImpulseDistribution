@@ -3704,7 +3704,7 @@ enum SelfTest {
         // shared view is most likely to get wrong. The S0738 fixture's coil 0 is a sheet winding, so that scenario covers it.
         for segment in await model.CoilSegments() {
 
-            let wdgType = await segment.wdgType
+            let wdgType = segment.wdgType
 
             guard wdgType == .sheet || wdgType == .layer else {
 
@@ -3715,7 +3715,7 @@ enum SelfTest {
 
             guard let instant = AppController.WorstInstant(nodes: nodes, results: results, capacitiveDistribution: alpha, peakVoltage: scenario.peakVoltage) else {
 
-                text += "  SKIPPED the radial profile of coil \(await segment.radialPos): its nodes are not in the result.\n"
+                text += "  SKIPPED the radial profile of coil \(segment.radialPos): its nodes are not in the result.\n"
                 continue
             }
 
@@ -3790,7 +3790,7 @@ enum SelfTest {
             }
             catch {
 
-                text += "  FAILED the radial profile of coil \(await segment.radialPos): \(error.localizedDescription)\n"
+                text += "  FAILED the radial profile of coil \(segment.radialPos): \(error.localizedDescription)\n"
             }
         }
 
