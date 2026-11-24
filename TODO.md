@@ -372,18 +372,48 @@ accuracy. Known gaps:
 
 `DielectricStress.StressAllowable` uses DelVecchio ch. 13 (see `docs/dielectric-stress.md` for the table and citations).
 
-**7a. Is the oil impulse allowable a breakdown level or a PD level? Waiting on a paper (requested 2026-11-24).** 13.27 is Moser's
-a.c. **partial discharge inception** curve (13.12, degassed oil, bare electrodes), not breakdown data. 13.30 carries it to impulse
-with a 2.8 ratio taken from *breakdown* tests. Kulkarni & Khaparde Fig. 8.9 shows PD and breakdown volt-time curves far apart at
-microseconds and close together at minutes. So it is not settled whether 50·d^−0.36 is an impulse breakdown level or an impulse PD
-level, and the 0.65 `designMargin` means something different in each case. The source that answers it is **M. Ikeda, H. Okubo, T. Yanari,
-"PD and BD Probability Distribution and Equi-Probabilistic V-t Characteristics of Oil-Filled Transformer Insulation", IEEE Trans.
-PAS-101(8), Aug. 1982, DOI 10.1109/TPAS.1982.317644** (https://ieeexplore.ieee.org/document/4111661; Kulkarni & Khaparde's ref.
-[34]). It gives equi-probable PD and breakdown V-t curves from µs to 10 h for disc-to-disc, turn-to-turn and barrier-duct insulation.
-When it arrives, read the impulse PD/BD ratio for disc-to-disc insulation off its figures, rendered as images. Then decide (i)
-whether 13.30 should be relabelled, rescaled, or kept, and (ii) whether the oil rows want a different margin from paper and
-pressboard. Related options already recorded in the doc: the insulated-electrode PD curve 21.2·d^−0.36 is a closer physical match
-for paper-covered discs, and K&K's 8.4 kV rms/mm is the only sourced corner figure (a.c. PD, not impulse). Background reading, Nelson 1989 (DOI 10.1109/14.42161, the source of K&K's 18·d^−0.38), was judged not worth obtaining.
+**7a. Is the oil impulse allowable a breakdown level or a PD level? Neither: about 0.8 of breakdown (paper read 2026-11-24);
+two decisions left.** 13.27 is Moser's a.c. **partial discharge inception** curve (13.12, degassed oil, bare electrodes), not
+breakdown data, and 13.30 carries it to impulse with a 2.8 ratio. The source that settles what that makes it is **M. Ikeda,
+H. Okubo, T. Yanari, "PD and BD Probability Distribution and Equi-Probabilistic V-t Characteristics of Oil-Filled Transformer
+Insulation", IEEE Trans. PAS-101(8), Aug. 1982, DOI 10.1109/TPAS.1982.317644** (Kulkarni & Khaparde's ref. [34]). The PDF is in
+`~/Library/CloudStorage/GoogleDrive-huberistech@gmail.com/My Drive/Design Stuff/PartialDischarge/`. Its text layer is garbled:
+read the tables off the rendered pages (Table 1 is on page 3; section 4.3, the four-day tests, on page 7).
+
+What it gives (50% values, Table 1, as a fraction of the one-minute a.c. **peak**; the tests are 1.2/50 µs LI, 250/2500 µs SI,
+PD at 1000 pC under impulse and repeated 10 pC under a.c.):
+
+| | PD: LI / SI / a.c. 0.2 s / 1 min / 1 h | BD: LI / SI / a.c. 0.2 s / 1 min |
+|---|---|---|
+| turn-to-turn | 1.37 / 1.26 / 1.13 / 1.00 / 0.91 | 1.74 / 1.62 / 1.37 / 1.00 |
+| section-to-section (disc-to-disc) | 1.41 / 1.30 / 1.14 / 1.00 / 0.87 | 1.95 / 1.74 / 1.36 / 1.00 |
+| oil duct between barriers | 1.62 / 1.44 / 1.23 / 1.00 / 0.89 | 2.49 / 2.12 / 1.54 / 1.00 |
+
+- Against the a.c. **rms**, as the book's ratio is taken, the LI ratio is ×√2 of these: **1.94–2.29 for PD inception and 2.46–3.52
+  for breakdown; for disc-to-disc, 1.99 and 2.76**. So the book's 2.8 is a breakdown ratio, as suspected.
+- At one minute of a.c., PD inception is already close to breakdown: 111.3/137 kV peak = **0.81** for disc-to-disc (0.72
+  turn-to-turn, 0.95 barrier duct). Under LI it is 0.57–0.62 of breakdown.
+- So for disc-to-disc, **13.30 = 2.8 × (a.c. PD) ≈ 2.8 × 0.81 × (a.c. BD) ≈ 0.82 × LI breakdown, and ≈ 1.4 × LI PD inception.**
+  It is neither curve; it reads best as about 0.8 of the 50% impulse breakdown level. This rests on Ikeda's composite disc-to-disc
+  test pieces (paper-covered conductors, ~10 mm duct) standing in for Moser's bare-electrode gaps.
+- What the 0.65 `designMargin` then means for oil: 0.65 × 13.30 ≈ **0.53 of the 50% LI breakdown** (paper and pressboard get 0.65
+  of theirs), and ≈ **0.92 of the 50% LI PD inception**. With the LI PD Weibull shape m ≈ 11 (Table 1), that is about a 25% chance
+  of PD (≥1000 pC) at the allowable, and a negligible chance of breakdown.
+- The paper's own view (Fig. 11 and §4.1): the LI test level falls between PD inception and breakdown, so a design cannot be PD-free
+  under impulse, and insulation "must be effected considering the lightning impulse" so as to **withstand** it even if PD starts.
+  That supports judging impulse against breakdown, not PD inception.
+- Long a.c. durations (for the a.c. checks, used by PchElectrostaticModel's `StressAllowables.durationFactor`): one hour is
+  0.87–0.91 of one minute; four days 0.78–0.82 (§4.3: 48.4/58.8, 61.9/78.7, 97.8/125.9 kV rms), and the PD-t curves go flat
+  after about ten hours.
+
+Decisions left: **(i)** relabel 13.30 in `StressAllowable.OilImpulse`, its doc comment and `docs/dielectric-stress.md` as "≈0.8 of
+50% impulse breakdown (Ikeda 1982)" rather than a PD-based hybrid. Rescaling it to a true breakdown level (÷0.82, about 61·d^−0.36)
+is possible but rests on one structure's ratio. **(ii)** Whether oil keeps the same 0.65 margin. As it stands oil is held about 20%
+harder than the solids against breakdown. That is defensible, because oil PD under impulse is what starts the damage, but now
+it is a choice to state, not an accident. Related options already recorded in the doc: the insulated-electrode PD curve
+21.2·d^−0.36 is a closer physical match for paper-covered discs, and K&K's 8.4 kV rms/mm is the only sourced corner figure (a.c.
+PD, not impulse). Background reading, Nelson 1989 (DOI 10.1109/14.42161, the source of K&K's 18·d^−0.38), was judged not worth
+obtaining.
 
 **7b.** One thing in the table is not straight from the book:
 
@@ -523,6 +553,11 @@ What has to come first is **geometry that is not in `PhaseModel` today**:
 - a hilo barrier **extends past the coil ends**, so the path is up one face, around the overhang and back down the other;
 - at high voltage that end carries **angle rings and caps**, which lengthen it further;
 - a key spacer's path runs around the spacer, bounded by the disc faces clamping it.
+
+**PchElectrostaticModel now models that geometry (2026-11-24).** It has the barrier overhangs, angle rings, caps, and (through a
+stick column) the spacers, sticks and blocks. Its FEMM script finds every oil-solid surface in the mesh and judges each against 13.16
+the book's way (stretches of every length, the worst one), at a.c. test voltages. An impulse creep check here could take its
+surfaces from there, or that project could run its report at this one's instantaneous disc voltages.
 
 Note also that some creep paths are better judged on **area** than length — a stick surface bridging a hilo, say — which is what
 `CreepPowerFrequencyByArea` (13.15) was implemented for and why it is worth keeping.
