@@ -21,7 +21,7 @@ that was fixed once and must not come back.**
 | Working on… | Read |
 |---|---|
 | Series/shunt capacitance, wound-in shields, interleaving, τ_p, DelVecchio ch. 12 | `docs/capacitance.md` |
-| Stress report, stress profiles, turn ladder, radial voltage profile (sheet/layer), breakdown allowables (DelVecchio ch. 13) | `docs/dielectric-stress.md` |
+| Stress report, stress profiles, turn ladder, radial voltage profile (sheet/layer), breakdown and PD-inception allowables (DelVecchio ch. 13 — the oil rows are PD inception, TODO 7a) | `docs/dielectric-stress.md` |
 | Frequency-domain solver, NILT, conductor impedance, `SimulationModel`, RK45, SPICE export | `docs/solver.md` |
 | Connectors, jumpers, terminations, `SetNodes`/`NodeAt`, tapping gaps, regulating-winding declarations | `docs/connectors-and-nodes.md` |
 | Segment indexing, static rings, radial shields, radial build-up | `docs/segments-and-geometry.md` |

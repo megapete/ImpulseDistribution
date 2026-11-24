@@ -368,10 +368,24 @@ RV ends 0.076 p.u. (42 kV).
 Added 2026-08-05 (`DielectricStress.swift`, `TurnLadderModel.swift`). See `docs/dielectric-stress.md` for the method and its
 accuracy. Known gaps:
 
-### 7. One open question on the chapter 13 allowables
+### 7. Two open questions on the chapter 13 allowables
 
-`DielectricStress.StressAllowable` uses DelVecchio ch. 13 (see `docs/dielectric-stress.md` for the table and citations). One thing
-in it is not straight from the book:
+`DielectricStress.StressAllowable` uses DelVecchio ch. 13 (see `docs/dielectric-stress.md` for the table and citations).
+
+**7a. Is the oil impulse allowable a breakdown level or a PD level? Waiting on a paper (requested 2026-11-24).** 13.27 is Moser's
+a.c. **partial discharge inception** curve (13.12, degassed oil, bare electrodes), not breakdown data. 13.30 carries it to impulse
+with a 2.8 ratio taken from *breakdown* tests. Kulkarni & Khaparde Fig. 8.9 shows PD and breakdown volt-time curves far apart at
+microseconds and close together at minutes. So it is not settled whether 50·d^−0.36 is an impulse breakdown level or an impulse PD
+level, and the 0.65 `designMargin` means something different in each case. The source that answers it is **M. Ikeda, H. Okubo, T. Yanari,
+"PD and BD Probability Distribution and Equi-Probabilistic V-t Characteristics of Oil-Filled Transformer Insulation", IEEE Trans.
+PAS-101(8), Aug. 1982, DOI 10.1109/TPAS.1982.317644** (https://ieeexplore.ieee.org/document/4111661; Kulkarni & Khaparde's ref.
+[34]). It gives equi-probable PD and breakdown V-t curves from µs to 10 h for disc-to-disc, turn-to-turn and barrier-duct insulation.
+When it arrives, read the impulse PD/BD ratio for disc-to-disc insulation off its figures, rendered as images. Then decide (i)
+whether 13.30 should be relabelled, rescaled, or kept, and (ii) whether the oil rows want a different margin from paper and
+pressboard. Related options already recorded in the doc: the insulated-electrode PD curve 21.2·d^−0.36 is a closer physical match
+for paper-covered discs, and K&K's 8.4 kV rms/mm is the only sourced corner figure (a.c. PD, not impulse). Background reading, Nelson 1989 (DOI 10.1109/14.42161, the source of K&K's 18·d^−0.38), was judged not worth obtaining.
+
+**7b.** One thing in the table is not straight from the book:
 
 - **`creepImpulseRatio` (2.8)** — the book gives creep breakdown only at power frequency (13.15, 13.16). The impulse creep figure
   here is 13.16 scaled by the oil impulse ratio, on the grounds that creep along a pressboard surface in oil is an oil-adjacent
