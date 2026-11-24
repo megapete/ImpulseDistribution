@@ -28,7 +28,9 @@
 //
 //      strike (through a gap)      vs   creep (along a surface) - different formulas, different exponents
 //      power frequency (rms)       vs   impulse (peak)          - a factor of ~2.8 for oil
-//      the design margin           vs   the 50% breakdown level  - the book's data are the latter
+//      the design margin           vs   the book's level         - the book's data are the latter: 50% breakdown
+//                                                                  for paper/pressboard, but PD inception for oil
+//                                                                  (13.27 IS 13.12's PD curve; see OilImpulse)
 //      distance-dependent          vs   a single number          - a factor of two across one coil's gaps
 //
 //  In particular Segment.woundInShieldMaxWorkingStress (2755 V/mm, 70 V/mil) is a POWER-FREQUENCY working
@@ -440,7 +442,10 @@ enum DielectricStress {
         /// Planar oil gap under IMPULSE, V/m peak. DelVecchio 13.30: E = 50·d^(−0.36) kV/mm with d in mm.
         ///
         /// This is 13.27's a.c. figure (17.8·d^(−0.36) rms, from Moser's degassed-oil, non-insulated-electrode data) scaled by the
-        /// 2.8 impulse ratio, exactly as the book derives it.
+        /// 2.8 impulse ratio, exactly as the book derives it (p.375). Note that 13.27 is 13.12's a.c. PARTIAL DISCHARGE INCEPTION
+    /// curve, not a breakdown fit, while the 2.8 comes from breakdown experiments (13.11). So this is a hybrid: PD inception
+    /// carried to impulse by a breakdown ratio. It is defensible because PD and breakdown volt-time curves come together at long
+    /// a.c. times (Kulkarni & Khaparde Fig. 8.9). See docs/dielectric-stress.md under the allowables table.
         static func OilImpulse(gap:Double) -> Double {
 
             return PowerLaw(coefficient: 50.0, exponent: 0.36, distance: gap)

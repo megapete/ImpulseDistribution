@@ -73,6 +73,23 @@ decimal points. Verify any change the same way; do not trust `pdftotext` for the
 | **creep**, a.c. rms, by distance | 13.16 | 16.6·d_c^−0.46 |
 | **creep**, a.c. rms, by area | 13.15 | **16.0 − 1.09·ln A_c** |
 
+**The two oil rows are not breakdown data (established 2026-11-23).** 13.27 is introduced on p.375 as Moser's [Mos79] planar-gap
+data "fitted to the formula given previously in (13.12) and repeated here", and 13.12 (p.370) is explicitly the a.c. (50 Hz, 1 min)
+**partial discharge inception** stress. The chapter warns that it uses "breakdown" loosely to mean breakdown or PD inception (p.373).
+So 13.27 is the PD-inception curve for **degassed oil with bare electrodes**. 13.30 multiplies it by an impulse ratio of 2.8, and that
+ratio comes from **breakdown** experiments (13.11 and p.375). So 13.30 is a hybrid: an a.c. PD-inception curve scaled by a
+breakdown impulse ratio. It is still a fair estimate of impulse strength, because the PD and breakdown volt-time curves come
+together at long a.c. times (Kulkarni & Khaparde Fig. 8.9). That makes the a.c. PD curve close to an a.c. breakdown curve, and 2.8
+then carries it to impulse. The paper and pressboard rows (13.4, 13.5, 13.8) are genuine breakdown fits.
+
+13.12 gives three more PD-inception curves, all a.c. rms in kV/mm with d in mm: 14.2·d^−0.36 (gas-saturated oil, bare electrodes),
+19.0·d^−0.38 (gas-saturated, insulated) and 21.2·d^−0.36 (degassed, insulated). Disc conductors are paper-covered, so the
+**insulated** curve is arguably the closer match for a disc duct, and it is about 19% above 13.27. The screen keeps 13.27 because
+it is the curve the book carries forward to impulse. Kulkarni & Khaparde §8.5 (p.375) agrees with 13.12: 10 kV rms/mm for an 8 mm
+degassed duct with insulated conductors (21.2·8^−0.36 = 10.03), and about **8.4 kV rms/mm next to the winding, where the conductor
+corners raise the stress**. That corner figure is the only sourced number either book gives for a corner. It is a.c. PD inception,
+not impulse, so it does not supply the missing corner criterion described below.
+
 **The screen is strike-only — the two creep rows are present but unused (2026-08-06).** The creep *allowables* are fine and
 `VerifySelf` still pins all three; what was wrong was the *geometry* fed to them. A creep path was taken as the straight axial run
 between the electrodes: the gap itself for a key spacer, and for a hilo barrier the **difference in the two coils' end heights**.
@@ -95,8 +112,10 @@ Four distinctions in there must never be collapsed: **strike vs. creep** (differ
 is why a short creep path carrying a large voltage so often governs, and why the missing creep check above is not a small gap);
 **power frequency vs. impulse** (ratio ≈2.8 for oil, 2.7 for
 paper, 3.0 for pressboard); **rms vs. peak** (the a.c. forms are rms, the impulse forms peak, and the simulation gives instantaneous
-volts, so the impulse forms compare like with like); and **50% breakdown vs. design level** (p.368 — the book's data are the former,
-so `StressAllowable.designMargin` brings it to the latter; see the next section).
+volts, so the impulse forms compare like with like); and **book level vs. design level** (p.368 — the book's levels are the
+former, so `StressAllowable.designMargin` brings them to the latter; see the next section). The book level is 50% breakdown for
+paper and pressboard, but for oil it is the PD-inception-based hybrid described under the table above. So the margin is applied to a
+level that is already more conservative for oil than for the solids.
 
 ## The design margin is a preference, and the book barely supports a number
 
@@ -113,12 +132,13 @@ rather than a citation, and the book was re-checked on 2026-08-09 to see how muc
 So the old 0.80 was one figure's choice, not a recommendation, and an earlier version of this file overstated it by calling
 Figure 13.5 its basis. For calibration: the author's long-standing empirical disc-to-disc formula — 43·(rs_t/0.11)^0.7 +
 25·(cp_t/0.02)^0.75 kV, dimensions in inches — lands at **0.67–0.90 of this screen's allowable** across the practical range (ducts
-2.5–12.7 mm, paper 0.25–2 mm total), an effective margin of roughly 0.6–0.8 on the book's 50% level, so 0.65 sits inside house
-practice rather than beside it.
+2.5–12.7 mm, paper 0.25–2 mm total), an effective margin of roughly 0.6–0.8 on the book's level, so 0.65 sits inside house
+practice rather than beside it. That comparison is like with like, since it is made against the same mixed oil/paper allowables
+the screen uses. It is not a margin on pure 50% breakdown.
 
 What the setting does and does not do is worth keeping straight: every allowable is multiplied by it, so **every utilization scales
 as 1/margin**. It moves the pass/fail line and **cannot change the worst-first ranking**, which is what the screen is for. At 1.00
-the report reads as a straight percentage of the book's 50%-breakdown level. `StressReportWindow`'s summary line prints the margin
+the report reads as a straight percentage of the book's level: 50% breakdown for paper and pressboard, PD-inception-based for oil. `StressReportWindow`'s summary line prints the margin
 in force, so a screenshot of a report is self-describing.
 
 **`Segment.woundInShieldMaxWorkingStress` (2755 V/mm, 70 V/mil) must never be used here.** It is a *power-frequency working*
